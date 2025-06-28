@@ -1,3 +1,4 @@
+import Moralis from "moralis";
 import { createApp } from "./app.js";
 import { connectDB } from "./database.js";
 import dotenv from "dotenv";
@@ -12,10 +13,12 @@ async function bootstrap() {
   try {
     await connectDB(MONGO_URI);
 
+    await Moralis.start({ apiKey: process.env.MORALIS_API! });
+
     const app = createApp();
-    app.listen(PORT, () => {
-      console.log(`🚀  Server running at http://localhost:${PORT}`);
-    });
+    app.listen(PORT, () =>
+      console.log(`🚀 Server running at http://localhost:${PORT}`)
+    );
   } catch (err) {
     console.error("❌  Failed to start server:", err);
     process.exit(1);

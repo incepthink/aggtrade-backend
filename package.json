@@ -1,11 +1,11 @@
 {
   "name": "aggtrade-backend",
   "module": "index.ts",
-  "type": "commonjs",   
+  "type": "commonjs",
   "scripts": {
     "build": "tsc",
-  "start": "node dist/index.js"
-},
+    "start": "node dist/index.js"
+  },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/cors": "^2.8.19",
@@ -18,10 +18,13 @@
     "@types/node": "^24.0.7",
     "cors": "^2.8.5",
     "dotenv": "^17.0.0",
+    "ethers": "^6.14.4",
     "express": "^5.1.0",
     "express-rate-limit": "^7.5.1",
+    "http-proxy-middleware": "^3.0.5",
     "mongodb": "^6.17.0",
     "mongoose": "^8.16.1",
+    "moralis": "^2.27.2",
     "ts-node": "^10.9.2",
     "zod": "^3.25.67"
   }
