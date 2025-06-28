@@ -3,16 +3,15 @@
     // Enable latest features
     "lib": ["ESNext", "DOM"],
     "target": "ESNext",
-    "module": "ESNext",
+    "module": "commonjs",
     "moduleDetection": "force",
     "jsx": "react-jsx",
     "allowJs": true,
-
+    "rootDir": ".",          
+    "outDir": "dist",     
+ "esModuleInterop": true,
     // Bundler mode
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "noEmit": true,
+    "noEmit": false,
 
     // Best practices
     "strict": true,
@@ -23,5 +22,6 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
-  }
+  },
+  "include": ["*.ts"] 
 }
