@@ -2,6 +2,8 @@ import type { Request, Response, NextFunction } from "express";
 import Mapping from "./models";
 import Moralis from "moralis";
 import { ethers } from "ethers";
+import { createProxyMiddleware } from "http-proxy-middleware";
+import Bottleneck from "bottleneck";
 
 /**
  * POST /api/address
@@ -127,3 +129,32 @@ export async function getTokenPrice(
     res.status(500).json({ status: "error", msg: message });
   }
 }
+
+export const oneInchProxy = createProxyMiddleware({
+  target: "https://api.1inch.dev",
+  changeOrigin: true,
+  pathRewrite: {
+    "^/approve/allowance": "/swap/v5.2/1/approve/allowance",
+    "^/approve/transaction": "/swap/v5.2/1/approve/transaction",
+    "^/swap": "/swap/v5.2/1/swap",
+  },
+  on: {
+    proxyReq(proxyReq, req) {
+      proxyReq.setHeader("Authorization", `Bearer ${process.env.ONEINCH_KEY}`);
+      console.log("[1inch ➜]", req.url);
+    },
+    proxyRes(proxyRes, req) {
+      console.log("[1inch ⇦]", proxyRes.statusCode, req.url);
+    },
+  },
+});
+
+const limiter = new Bottleneck({
+  reservoir: 1,
+  reservoirRefreshAmount: 1,
+  reservoirRefreshInterval: 3000, // refill 1 request per second
+});
+
+export const rateLimit = (req: Request, res: Response, next: NextFunction) => {
+  limiter.schedule(() => Promise.resolve()).then(next);
+};
