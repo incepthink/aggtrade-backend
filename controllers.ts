@@ -174,7 +174,14 @@ async function fetchFromCoinGecko(tokenAddress: string): Promise<{
   if (ethRegex.test(tokenAddress)) {
     const { data } = await axios.get(
       `${BASE}/coins/ethereum/contract/${tokenAddress}`,
-      { headers, params: { localization: false }, timeout: 10_000 }
+      {
+        headers: {
+          ...headers,
+          "Accept-Encoding": "gzip, deflate",
+        },
+        params: { localization: false },
+        timeout: 10_000,
+      }
     );
     coinId = data.id;
     fdv = data.market_data?.fully_diluted_valuation?.usd ?? null;
