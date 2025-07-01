@@ -168,22 +168,8 @@ async function fetchFromCoinGecko(tokenAddress: string): Promise<{
   const ethRegex = /^0x[a-f0-9]{40}$/i;
   let coinId = tokenAddress;
 
-  const { data: meta } = await axios.get(
-    `${BASE}/coins/ethereum/contract/${tokenAddress}`,
-    {
-      headers,
-      params: {
-        localization: false,
-        tickers: false,
-        community_data: false,
-        developer_data: false,
-      },
-      timeout: 10_000,
-    }
-  );
-
-  const fdv = meta.market_data?.fully_diluted_valuation?.usd ?? null;
-  const vol = meta.market_data?.total_volume?.usd ?? null;
+  let fdv = 0;
+  let vol = 0;
 
   if (ethRegex.test(tokenAddress)) {
     const { data } = await axios.get(
@@ -191,12 +177,17 @@ async function fetchFromCoinGecko(tokenAddress: string): Promise<{
       { headers, params: { localization: false }, timeout: 10_000 }
     );
     coinId = data.id;
+    fdv = data.market_data?.fully_diluted_valuation?.usd ?? null;
+    vol = data.market_data?.total_volume?.usd ?? null;
   }
 
   const {
     data: { prices },
   } = await axios.get(`${BASE}/coins/${coinId}/market_chart`, {
-    headers,
+    headers: {
+      ...headers,
+      "Accept-Encoding": "gzip, deflate",
+    },
     params: { vs_currency: "usd", days: 365 },
     timeout: 10_000,
   });
