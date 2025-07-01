@@ -4,14 +4,9 @@ import Moralis from "moralis";
 import { ethers } from "ethers";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import Bottleneck from "bottleneck";
+import axios from "axios";
+import { getValue, storeValue } from "./redis";
 
-/**
- * POST /api/address
- * Body: { userAddress: string, dydxAddress: string }
- *
- * • Creates a new mapping if none exists
- * • Otherwise updates the stored dydxAddress
- */
 export async function createMapping(
   req: Request,
   res: Response,
@@ -158,3 +153,113 @@ const limiter = new Bottleneck({
 export const rateLimit = (req: Request, res: Response, next: NextFunction) => {
   limiter.schedule(() => Promise.resolve()).then(next);
 };
+
+type Point = { ts: number; price: number };
+type Meta = { fdv: number | null; vol: number | null };
+
+async function fetchFromCoinGecko(tokenAddress: string): Promise<{
+  chart: Point[];
+  metadata: Meta;
+}> {
+  const BASE = "https://api.coingecko.com/api/v3";
+  const KEY = process.env.COINGECKO_API_KEY;
+  const headers = KEY ? { "x-cg-demo-api-key": KEY } : undefined;
+
+  const ethRegex = /^0x[a-f0-9]{40}$/i;
+  let coinId = tokenAddress;
+
+  const { data: meta } = await axios.get(
+    `${BASE}/coins/ethereum/contract/${tokenAddress}`,
+    {
+      headers,
+      params: {
+        localization: false,
+        tickers: false,
+        community_data: false,
+        developer_data: false,
+      },
+      timeout: 10_000,
+    }
+  );
+
+  const fdv = meta.market_data?.fully_diluted_valuation?.usd ?? null;
+  const vol = meta.market_data?.total_volume?.usd ?? null;
+
+  if (ethRegex.test(tokenAddress)) {
+    const { data } = await axios.get(
+      `${BASE}/coins/ethereum/contract/${tokenAddress}`,
+      { headers, params: { localization: false }, timeout: 10_000 }
+    );
+    coinId = data.id;
+  }
+
+  const {
+    data: { prices },
+  } = await axios.get(`${BASE}/coins/${coinId}/market_chart`, {
+    headers,
+    params: { vs_currency: "usd", days: 365 },
+    timeout: 10_000,
+  });
+
+  return {
+    chart: prices.map(([ts, price]: [number, number]) => ({ ts, price })),
+    metadata: { fdv, vol },
+  };
+}
+
+const CACHE_KEY_PREFIX = "priceChart_";
+const DATA_TTL = 60 * 60 * 24 * 365 * 10; // keep Redis entry for 10 years
+const REFRESH_AFTER_MS = 5 * 60 * 1000; // refetch if older than 5 min
+
+export async function getPriceData(
+  req: Request,
+  res: Response,
+  _next: NextFunction
+): Promise<void> {
+  const raw = String(req.query.tokenAddress || "")
+    .trim()
+    .toLowerCase();
+  if (!raw) {
+    res.status(400).json({ error: "tokenAddress param missing" });
+    return;
+  }
+
+  const CACHE_KEY = `${CACHE_KEY_PREFIX}${raw}`;
+
+  /* ───────────── 1) read cache ───────────── */
+  let cached: { updated: number; data: any[] } | null = null;
+  try {
+    const cachedStr = await getValue(CACHE_KEY);
+    if (cachedStr) cached = JSON.parse(cachedStr);
+  } catch (e) {
+    console.error("redis read error", e);
+  }
+
+  const isFresh = cached && Date.now() - cached.updated < REFRESH_AFTER_MS;
+  if (isFresh) {
+    res.json(cached!.data);
+    return;
+  }
+
+  /* ───────────── 2) need refresh ───────────── */
+  try {
+    const data = await fetchFromCoinGecko(raw);
+    await storeValue(
+      CACHE_KEY,
+      JSON.stringify({ updated: Date.now(), data }),
+      DATA_TTL
+    );
+    res.json(data);
+  } catch (err) {
+    console.warn("CoinGecko fetch failed:", (err as any).message);
+
+    // serve stale cache if we have it
+    if (cached) {
+      res.json(cached.data);
+      return;
+    }
+
+    // no cache at all → bubble up
+    res.status(503).json({ error: "Upstream unavailable, try later." });
+  }
+}

@@ -24,6 +24,7 @@
     "express": "^5.1.0",
     "express-rate-limit": "^7.5.1",
     "http-proxy-middleware": "^3.0.5",
+    "ioredis": "^5.6.1",
     "mongodb": "^6.17.0",
     "mongoose": "^8.16.1",
     "moralis": "^2.27.2",

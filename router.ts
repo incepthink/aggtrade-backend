@@ -3,6 +3,7 @@ import { Router } from "express";
 import {
   createMapping,
   getMappingByUserAddress,
+  getPriceData,
   getTokenPrice,
 } from "./controllers";
 
@@ -15,5 +16,7 @@ router.post("/address", createMapping);
 router.get("/address/:userAddress", getMappingByUserAddress);
 
 router.get("/tokenPrice", getTokenPrice);
+
+router.get("/chart/price", getPriceData);
 
 export default router;
