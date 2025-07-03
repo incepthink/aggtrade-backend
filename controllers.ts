@@ -82,7 +82,7 @@ export async function getTokenPrice(
   res: Response
 ): Promise<void> {
   try {
-    const { addressOne, addressTwo } = req.query;
+    let { addressOne, addressTwo } = req.query;
 
     // 1. Validate presence
     if (!addressOne || !addressTwo) {
@@ -98,6 +98,12 @@ export async function getTokenPrice(
         status: "error",
         msg: "One or both addresses are not valid EVM addresses",
       });
+    }
+
+    if (addressOne === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
+      addressOne = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
+    } else if (addressTwo === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
+      addressTwo = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
     }
 
     // 3. Fetch prices (safe to assert type now)
@@ -172,17 +178,32 @@ async function fetchFromCoinGecko(tokenAddress: string): Promise<{
   let vol = 0;
 
   if (ethRegex.test(tokenAddress)) {
-    const { data } = await axios.get(
-      `${BASE}/coins/ethereum/contract/${tokenAddress}`,
-      {
+    let data;
+    if (tokenAddress === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
+      const { data: dataRes } = await axios.get(`${BASE}/coins/ethereum`, {
         headers: {
           ...headers,
           "Accept-Encoding": "gzip, deflate",
         },
         params: { localization: false },
         timeout: 10_000,
-      }
-    );
+      });
+      data = dataRes;
+    } else {
+      const { data: dataRes } = await axios.get(
+        `${BASE}/coins/ethereum/contract/${tokenAddress}`,
+        {
+          headers: {
+            ...headers,
+            "Accept-Encoding": "gzip, deflate",
+          },
+          params: { localization: false },
+          timeout: 10_000,
+        }
+      );
+      data = dataRes;
+    }
+
     coinId = data.id;
     fdv = data.market_data?.fully_diluted_valuation?.usd ?? null;
     vol = data.market_data?.total_volume?.usd ?? null;
