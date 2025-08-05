@@ -77,12 +77,54 @@ export async function getMappingByUserAddress(
   }
 }
 
+// Chain configurations
+const SUPPORTED_CHAINS = {
+  ethereum: {
+    id: 1,
+    name: "Ethereum",
+    moralisChain: "0x1",
+    wethAddress: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+  },
+  katana: {
+    id: 747474,
+    name: "Katana",
+    moralisChain: "0xb686a", // Katana chain ID in hex (747474 = 0xb686a)
+    wethAddress: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", // Update with actual WETH address on Katana
+  },
+} as const;
+
+type SupportedChain = keyof typeof SUPPORTED_CHAINS;
+
+// Get token price using Moralis for all supported chains
+async function getTokenPriceByChain(
+  address: string,
+  chain: SupportedChain
+): Promise<number> {
+  const chainConfig = SUPPORTED_CHAINS[chain];
+
+  const response = await Moralis.EvmApi.token.getTokenPrice({
+    address: address as `0x${string}`,
+    chain: chainConfig.moralisChain,
+  });
+
+  return response.raw.usdPrice;
+}
+
 export async function getTokenPrice(
-  req: Request<{}, {}, {}, { addressOne?: string; addressTwo?: string }>,
+  req: Request<
+    {},
+    {},
+    {},
+    {
+      addressOne?: string;
+      addressTwo?: string;
+      chainId?: string;
+    }
+  >,
   res: Response
 ): Promise<void> {
   try {
-    let { addressOne, addressTwo } = req.query;
+    let { addressOne, addressTwo, chainId } = req.query;
 
     // 1. Validate presence
     if (!addressOne || !addressTwo) {
@@ -90,40 +132,159 @@ export async function getTokenPrice(
         status: "error",
         msg: "Both `addressOne` and `addressTwo` must be provided",
       });
+      return;
     }
 
-    // 2. Validate address format
+    // 2. Default to ethereum if chainId not provided
+    const chain = (chainId?.toLowerCase() || "ethereum") as SupportedChain;
+
+    // 3. Validate chainId
+    if (!SUPPORTED_CHAINS[chain]) {
+      res.status(400).json({
+        status: "error",
+        msg: "Invalid chainId. Supported chains: ethereum, katana",
+      });
+      return;
+    }
+
+    // 3. Validate address format
     if (!ethers.isAddress(addressOne) || !ethers.isAddress(addressTwo)) {
       res.status(422).json({
         status: "error",
         msg: "One or both addresses are not valid EVM addresses",
       });
+      return;
     }
 
+    // 4. Handle native token placeholder
+    const chainConfig = SUPPORTED_CHAINS[chain];
     if (addressOne === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
-      addressOne = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
-    } else if (addressTwo === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
-      addressTwo = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
+      addressOne = chainConfig.wethAddress;
+    }
+    if (addressTwo === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
+      addressTwo = chainConfig.wethAddress;
     }
 
-    // 3. Fetch prices (safe to assert type now)
-    const [resOne, resTwo] = await Promise.all([
-      Moralis.EvmApi.token.getTokenPrice({
-        address: addressOne as `0x${string}`,
-      }),
-      Moralis.EvmApi.token.getTokenPrice({
-        address: addressTwo as `0x${string}`,
-      }),
+    // 5. Fetch prices based on chain
+    const [priceOne, priceTwo] = await Promise.all([
+      getTokenPriceByChain(addressOne, chain),
+      getTokenPriceByChain(addressTwo, chain),
     ]);
 
-    // 4. Build response
+    // 6. Build response
     const data = {
-      tokenOne: resOne.raw.usdPrice,
-      tokenTwo: resTwo.raw.usdPrice,
-      ratio: resOne.raw.usdPrice / resTwo.raw.usdPrice,
+      tokenOne: priceOne,
+      tokenTwo: priceTwo,
+      ratio: priceOne / priceTwo,
+      chain: {
+        id: chainConfig.id,
+        name: chainConfig.name,
+      },
     };
 
     res.status(200).json({ status: "success", data });
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Unexpected server error";
+    console.error("Token price error:", err);
+
+    // Handle specific error cases
+    if (message.includes("Unable to fetch price")) {
+      res.status(404).json({
+        status: "error",
+        msg: "Token price not found. Token may not be available on the specified network or may have insufficient liquidity.",
+      });
+    } else if (message.includes("rate limit")) {
+      res.status(429).json({
+        status: "error",
+        msg: "Rate limit exceeded. Please try again later.",
+      });
+    } else {
+      res.status(500).json({ status: "error", msg: message });
+    }
+  }
+}
+
+// Optional: Add endpoint to get supported chains
+export async function getSupportedChains(
+  req: Request,
+  res: Response
+): Promise<void> {
+  try {
+    const chains = Object.entries(SUPPORTED_CHAINS).map(([key, config]) => ({
+      chainId: key,
+      name: config.name,
+      id: config.id,
+      supported: true,
+    }));
+
+    res.status(200).json({
+      status: "success",
+      data: {
+        chains,
+        count: chains.length,
+      },
+    });
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Unexpected server error";
+    res.status(500).json({ status: "error", msg: message });
+  }
+}
+
+// Optional: Health check endpoint for different chains
+export async function checkChainHealth(
+  req: Request<{ chainId: string }>,
+  res: Response
+): Promise<void> {
+  try {
+    const { chainId } = req.params;
+    const chain = chainId.toLowerCase() as SupportedChain;
+
+    if (!SUPPORTED_CHAINS[chain]) {
+      res.status(400).json({
+        status: "error",
+        msg: "Invalid chainId. Supported chains: ethereum, katana",
+      });
+      return;
+    }
+
+    const chainConfig = SUPPORTED_CHAINS[chain];
+    let healthy = false;
+    let latency = 0;
+
+    const startTime = Date.now();
+
+    try {
+      const chainConfig = SUPPORTED_CHAINS[chain];
+
+      // Test Moralis connection with a simple token price call for both chains
+      await Moralis.EvmApi.token.getTokenPrice({
+        address: chainConfig.wethAddress as `0x${string}`,
+        chain: chainConfig.moralisChain,
+      });
+
+      healthy = true;
+      latency = Date.now() - startTime;
+    } catch (error) {
+      console.error(`Health check failed for ${chain}:`, error);
+      healthy = false;
+      latency = Date.now() - startTime;
+    }
+
+    res.status(200).json({
+      status: "success",
+      data: {
+        chain: {
+          id: chainConfig.id,
+          name: chainConfig.name,
+          chainId: chain,
+        },
+        healthy,
+        latency: `${latency}ms`,
+        timestamp: new Date().toISOString(),
+      },
+    });
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Unexpected server error";
@@ -280,5 +441,86 @@ export async function getPriceData(
 
     // no cache at all → bubble up
     res.status(503).json({ error: "Upstream unavailable, try later." });
+  }
+}
+
+const MAX_RETRIES = 5;
+const RETRY_DELAY_MS = 1500;
+
+// Utility sleep function
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchPriceWithRetry(
+  address: string,
+  attempt = 0
+): Promise<number> {
+  const url = `https://api.coingecko.com/api/v3/simple/token_price/ethereum?contract_addresses=${address}&vs_currencies=usd`;
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+      },
+    });
+
+    if (res.status === 429 || res.status === 503) {
+      if (attempt < MAX_RETRIES) {
+        await sleep(RETRY_DELAY_MS * (attempt + 1));
+        return fetchPriceWithRetry(address, attempt + 1);
+      } else {
+        console.warn(`Failed to get price for ${address} after retries.`);
+        return 0;
+      }
+    }
+
+    if (!res.ok) {
+      throw new Error(`Failed: ${res.status} ${res.statusText}`);
+    }
+
+    const data = await res.json();
+    return data[address.toLowerCase()]?.usd ?? 0;
+  } catch (err) {
+    console.error(`Error fetching price for ${address}:`, err);
+    return 0;
+  }
+}
+
+export async function getTokenPricesFromCoinGecko(
+  req: Request<{}, {}, {}, { addresses?: string }>,
+  res: Response
+): Promise<void> {
+  try {
+    const { addresses } = req.query;
+
+    if (!addresses) {
+      res
+        .status(400)
+        .json({ status: "error", msg: "`addresses` query required" });
+      return;
+    }
+
+    const addressList = addresses
+      .split(",")
+      .map((addr) => addr.trim().toLowerCase())
+      .filter((a) => /^0x[a-f0-9]{40}$/i.test(a)); // basic EVM validation
+
+    if (addressList.length === 0) {
+      res.status(422).json({ status: "error", msg: "No valid EVM addresses" });
+      return;
+    }
+
+    const results: { [address: string]: number } = {};
+
+    for (const address of addressList) {
+      const price = await fetchPriceWithRetry(address);
+      results[address] = price;
+    }
+
+    res.status(200).json({ status: "success", data: results });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unexpected server error";
+    res.status(500).json({ status: "error", msg });
   }
 }

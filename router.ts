@@ -5,6 +5,7 @@ import {
   getMappingByUserAddress,
   getPriceData,
   getTokenPrice,
+  getTokenPricesFromCoinGecko,
 } from "./controllers";
 
 const router = Router();
@@ -18,5 +19,7 @@ router.get("/address/:userAddress", getMappingByUserAddress);
 router.get("/tokenPrice", getTokenPrice);
 
 router.get("/chart/price", getPriceData);
+
+router.get("/coingecko-prices", getTokenPricesFromCoinGecko);
 
 export default router;
