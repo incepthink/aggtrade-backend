@@ -82,32 +82,33 @@ const SUPPORTED_CHAINS = {
   ethereum: {
     id: 1,
     name: "Ethereum",
-    moralisChain: "0x1",
     wethAddress: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
   },
   katana: {
     id: 747474,
     name: "Katana",
-    moralisChain: "0xb686a", // Katana chain ID in hex (747474 = 0xb686a)
-    wethAddress: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", // Update with actual WETH address on Katana
+    wethAddress: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
   },
 } as const;
 
 type SupportedChain = keyof typeof SUPPORTED_CHAINS;
 
-// Get token price using Moralis for all supported chains
+// Get token price using appropriate API based on chain
 async function getTokenPriceByChain(
   address: string,
   chain: SupportedChain
 ): Promise<number> {
-  const chainConfig = SUPPORTED_CHAINS[chain];
-
-  const response = await Moralis.EvmApi.token.getTokenPrice({
-    address: address as `0x${string}`,
-    chain: chainConfig.moralisChain,
-  });
-
-  return response.raw.usdPrice;
+  if (chain === "ethereum") {
+    // Use Moralis for Ethereum
+    const response = await Moralis.EvmApi.token.getTokenPrice({
+      address: address as `0x${string}`,
+      chain: "0x1",
+    });
+    return response.raw.usdPrice;
+  } else {
+    // Use CoinGecko with retry logic for other chains
+    return await fetchPriceWithRetry(address);
+  }
 }
 
 export async function getTokenPrice(
@@ -126,7 +127,6 @@ export async function getTokenPrice(
   try {
     let { addressOne, addressTwo, chainId } = req.query;
 
-    // 1. Validate presence
     if (!addressOne || !addressTwo) {
       res.status(400).json({
         status: "error",
@@ -135,10 +135,8 @@ export async function getTokenPrice(
       return;
     }
 
-    // 2. Default to ethereum if chainId not provided
     const chain = (chainId?.toLowerCase() || "ethereum") as SupportedChain;
 
-    // 3. Validate chainId
     if (!SUPPORTED_CHAINS[chain]) {
       res.status(400).json({
         status: "error",
@@ -147,7 +145,6 @@ export async function getTokenPrice(
       return;
     }
 
-    // 3. Validate address format
     if (!ethers.isAddress(addressOne) || !ethers.isAddress(addressTwo)) {
       res.status(422).json({
         status: "error",
@@ -156,7 +153,6 @@ export async function getTokenPrice(
       return;
     }
 
-    // 4. Handle native token placeholder
     const chainConfig = SUPPORTED_CHAINS[chain];
     if (addressOne === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
       addressOne = chainConfig.wethAddress;
@@ -165,13 +161,11 @@ export async function getTokenPrice(
       addressTwo = chainConfig.wethAddress;
     }
 
-    // 5. Fetch prices based on chain
     const [priceOne, priceTwo] = await Promise.all([
       getTokenPriceByChain(addressOne, chain),
       getTokenPriceByChain(addressTwo, chain),
     ]);
 
-    // 6. Build response
     const data = {
       tokenOne: priceOne,
       tokenTwo: priceTwo,
@@ -188,8 +182,10 @@ export async function getTokenPrice(
       err instanceof Error ? err.message : "Unexpected server error";
     console.error("Token price error:", err);
 
-    // Handle specific error cases
-    if (message.includes("Unable to fetch price")) {
+    if (
+      message.includes("No liquidity pools found") ||
+      message.includes("C0006")
+    ) {
       res.status(404).json({
         status: "error",
         msg: "Token price not found. Token may not be available on the specified network or may have insufficient liquidity.",
@@ -205,7 +201,6 @@ export async function getTokenPrice(
   }
 }
 
-// Optional: Add endpoint to get supported chains
 export async function getSupportedChains(
   req: Request,
   res: Response
@@ -232,7 +227,6 @@ export async function getSupportedChains(
   }
 }
 
-// Optional: Health check endpoint for different chains
 export async function checkChainHealth(
   req: Request<{ chainId: string }>,
   res: Response
@@ -256,13 +250,14 @@ export async function checkChainHealth(
     const startTime = Date.now();
 
     try {
-      const chainConfig = SUPPORTED_CHAINS[chain];
-
-      // Test Moralis connection with a simple token price call for both chains
-      await Moralis.EvmApi.token.getTokenPrice({
-        address: chainConfig.wethAddress as `0x${string}`,
-        chain: chainConfig.moralisChain,
-      });
+      if (chain === "ethereum") {
+        await Moralis.EvmApi.token.getTokenPrice({
+          address: chainConfig.wethAddress as `0x${string}`,
+          chain: "0x1",
+        });
+      } else {
+        await fetchPriceWithRetry(chainConfig.wethAddress);
+      }
 
       healthy = true;
       latency = Date.now() - startTime;
@@ -314,7 +309,7 @@ export const oneInchProxy = createProxyMiddleware({
 const limiter = new Bottleneck({
   reservoir: 1,
   reservoirRefreshAmount: 1,
-  reservoirRefreshInterval: 3000, // refill 1 request per second
+  reservoirRefreshInterval: 3000,
 });
 
 export const rateLimit = (req: Request, res: Response, next: NextFunction) => {
@@ -388,8 +383,8 @@ async function fetchFromCoinGecko(tokenAddress: string): Promise<{
 }
 
 const CACHE_KEY_PREFIX = "priceChart_";
-const DATA_TTL = 60 * 60 * 24 * 365 * 10; // keep Redis entry for 10 years
-const REFRESH_AFTER_MS = 5 * 60 * 1000; // refetch if older than 5 min
+const DATA_TTL = 60 * 60 * 24 * 365 * 10;
+const REFRESH_AFTER_MS = 5 * 60 * 1000;
 
 export async function getPriceData(
   req: Request,
@@ -406,7 +401,6 @@ export async function getPriceData(
 
   const CACHE_KEY = `${CACHE_KEY_PREFIX}${raw}`;
 
-  /* ───────────── 1) read cache ───────────── */
   let cached: { updated: number; data: any[] } | null = null;
   try {
     const cachedStr = await getValue(CACHE_KEY);
@@ -421,7 +415,6 @@ export async function getPriceData(
     return;
   }
 
-  /* ───────────── 2) need refresh ───────────── */
   try {
     const data = await fetchFromCoinGecko(raw);
     await storeValue(
@@ -433,13 +426,11 @@ export async function getPriceData(
   } catch (err) {
     console.warn("CoinGecko fetch failed:", (err as any).message);
 
-    // serve stale cache if we have it
     if (cached) {
       res.json(cached.data);
       return;
     }
 
-    // no cache at all → bubble up
     res.status(503).json({ error: "Upstream unavailable, try later." });
   }
 }
@@ -447,7 +438,6 @@ export async function getPriceData(
 const MAX_RETRIES = 5;
 const RETRY_DELAY_MS = 1500;
 
-// Utility sleep function
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -480,6 +470,8 @@ async function fetchPriceWithRetry(
     }
 
     const data = await res.json();
+    console.log(data);
+
     return data[address.toLowerCase()]?.usd ?? 0;
   } catch (err) {
     console.error(`Error fetching price for ${address}:`, err);
@@ -504,7 +496,7 @@ export async function getTokenPricesFromCoinGecko(
     const addressList = addresses
       .split(",")
       .map((addr) => addr.trim().toLowerCase())
-      .filter((a) => /^0x[a-f0-9]{40}$/i.test(a)); // basic EVM validation
+      .filter((a) => /^0x[a-f0-9]{40}$/i.test(a));
 
     if (addressList.length === 0) {
       res.status(422).json({ status: "error", msg: "No valid EVM addresses" });
