@@ -23,5 +23,5 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   },
-  "include": ["*.ts"] 
+  "include": ["*.ts", "controllers/controllers.ts"] 
 }

@@ -6,7 +6,12 @@ import {
   getPriceData,
   getTokenPrice,
   getTokenPricesFromCoinGecko,
-} from "./controllers";
+} from "./controllers/controllers";
+import {
+  getTokens1inch,
+  portfolioDetailedController,
+  portfolioHistoryController,
+} from "./controllers/1inch";
 
 const router = Router();
 
@@ -21,5 +26,12 @@ router.get("/tokenPrice", getTokenPrice);
 router.get("/chart/price", getPriceData);
 
 router.get("/coingecko-prices", getTokenPricesFromCoinGecko);
+
+router.get("/proxy/1inch/tokens", getTokens1inch);
+router.get(
+  "/proxy/1inch/profile/detailed-overview",
+  portfolioDetailedController
+);
+router.get("/proxy/1inch/profile/equity-trend", portfolioHistoryController);
 
 export default router;

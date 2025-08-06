@@ -1,11 +1,11 @@
 import type { Request, Response, NextFunction } from "express";
-import Mapping from "./models";
+import Mapping from "../models";
 import Moralis from "moralis";
 import { ethers } from "ethers";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import Bottleneck from "bottleneck";
 import axios from "axios";
-import { getValue, storeValue } from "./redis";
+import { getValue, storeValue } from "../redis";
 
 export async function createMapping(
   req: Request,

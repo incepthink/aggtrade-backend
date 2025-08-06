@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import router from "./router";
-import { oneInchProxy, rateLimit } from "./controllers";
+import { oneInchProxy, rateLimit } from "./controllers/controllers";
 
 export function createApp(): express.Express {
   const app = express();
