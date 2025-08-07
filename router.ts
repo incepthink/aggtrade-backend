@@ -11,6 +11,7 @@ import {
   getTokens1inch,
   portfolioDetailedController,
   portfolioHistoryController,
+  SwapHistoryByAddress,
 } from "./controllers/1inch";
 
 const router = Router();
@@ -33,5 +34,7 @@ router.get(
   portfolioDetailedController
 );
 router.get("/proxy/1inch/profile/equity-trend", portfolioHistoryController);
+
+router.get("/proxy/1inch/profile/swap-history", SwapHistoryByAddress);
 
 export default router;

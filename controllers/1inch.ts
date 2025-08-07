@@ -169,3 +169,40 @@ export const portfolioHistoryController = async (
     }
   }
 };
+
+export const SwapHistoryByAddress = async (req: Request, res: Response) => {
+  const { addresses, limit = "20" } = req.query;
+
+  if (!addresses) {
+    res.status(400).json({ error: "addresses parameter is required" });
+  }
+
+  if (!process.env.ONEINCH_KEY) {
+    res.status(500).json({ error: "1inch API key not configured" });
+  }
+
+  try {
+    const url = `${ONEINCH_BASE_URL}/history/v2.0/history/${addresses}/events`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${process.env.ONEINCH_KEY}`,
+        "Content-Type": "application/json",
+      },
+    });
+    console.log(response);
+
+    if (!response.ok) {
+      throw new Error(`1inch API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log(data);
+
+    res.status(200).json(data);
+  } catch (error) {
+    console.error("Transactions API error:", error);
+    res.status(500).json({ error: "Failed to fetch transactions" });
+  }
+};

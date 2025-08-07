@@ -135,6 +135,8 @@ export async function getTokenPrice(
       return;
     }
 
+    console.log(addressOne, addressTwo);
+
     const chain = (chainId?.toLowerCase() || "ethereum") as SupportedChain;
 
     if (!SUPPORTED_CHAINS[chain]) {
