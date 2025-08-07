@@ -14,6 +14,8 @@ import {
   SwapHistoryByAddress,
 } from "./controllers/1inch";
 
+import { getKatanaBalance, getKatanaPrice } from "./controllers/etherRoutes";
+
 const router = Router();
 
 // POST /api/address → Create mapping if it doesn't exist
@@ -36,5 +38,8 @@ router.get(
 router.get("/proxy/1inch/profile/equity-trend", portfolioHistoryController);
 
 router.get("/proxy/1inch/profile/swap-history", SwapHistoryByAddress);
+
+router.get("/balance/katana", getKatanaBalance);
+router.get("/price/katana", getKatanaPrice);
 
 export default router;
