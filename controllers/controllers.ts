@@ -289,25 +289,83 @@ export async function checkChainHealth(
   }
 }
 
-export const oneInchProxy = createProxyMiddleware({
-  target: "https://api.1inch.dev",
-  changeOrigin: true,
-  pathRewrite: {
-    "^/approve/allowance": "/swap/v5.2/1/approve/allowance",
-    "^/approve/transaction": "/swap/v5.2/1/approve/transaction",
-    "^/swap": "/swap/v5.2/1/swap",
-  },
-  on: {
-    proxyReq(proxyReq, req) {
-      proxyReq.setHeader("Authorization", `Bearer ${process.env.ONEINCH_KEY}`);
-      console.log("[1inch ➜]", req.url);
-    },
-    proxyRes(proxyRes, req) {
-      console.log("[1inch ⇦]", proxyRes.statusCode, req.url);
-    },
-  },
-});
+const ONEINCH_BASE_URL = "https://api.1inch.dev/swap/v5.2/1";
 
+async function call1InchAPI(
+  endpoint: string,
+  params: Record<string, any> = {}
+) {
+  const url = new URL(`${ONEINCH_BASE_URL}/${endpoint}`);
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      url.searchParams.append(key, String(value));
+    }
+  });
+
+  console.log("[1inch ➜]", url.toString());
+
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${process.env.ONEINCH_KEY}`,
+      Accept: "application/json",
+    },
+  });
+
+  console.log("[1inch ⇦]", response.status);
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `1inch API error: ${response.status} ${response.statusText}`
+    );
+  }
+
+  return response.json();
+}
+
+export async function approveAllowance(req: Request, res: Response) {
+  try {
+    const data = await call1InchAPI("approve/allowance", req.query);
+    res.json(data);
+  } catch (error) {
+    console.error("Approve allowance error:", error);
+    res
+      .status(500)
+      .json({
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+  }
+}
+
+export async function approveTransaction(req: Request, res: Response) {
+  try {
+    const data = await call1InchAPI("approve/transaction", req.query);
+    res.json(data);
+  } catch (error) {
+    console.error("Approve transaction error:", error);
+    res
+      .status(500)
+      .json({
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+  }
+}
+
+export async function swap(req: Request, res: Response) {
+  try {
+    const data = await call1InchAPI("swap", req.query);
+    res.json(data);
+  } catch (error) {
+    console.error("Swap error:", error);
+    res
+      .status(500)
+      .json({
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+  }
+}
 const limiter = new Bottleneck({
   reservoir: 1,
   reservoirRefreshAmount: 1,

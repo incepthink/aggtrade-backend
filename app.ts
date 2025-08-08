@@ -1,7 +1,12 @@
 import express from "express";
 import cors from "cors";
 import router from "./router";
-import { oneInchProxy, rateLimit } from "./controllers/controllers";
+import {
+  approveAllowance,
+  approveTransaction,
+  rateLimit,
+  swap,
+} from "./controllers/controllers";
 
 export function createApp(): express.Express {
   const app = express();
@@ -25,7 +30,9 @@ export function createApp(): express.Express {
   // ── routes placeholder ─────────────────────────────────────────
   // import router from './routes'
   // app.use('/api', router)
-  app.use("/proxy/1inch", rateLimit, oneInchProxy);
+  app.get("/proxy/1inch/approve/allowance", rateLimit, approveAllowance);
+  app.get("/proxy/1inch/approve/transaction", rateLimit, approveTransaction);
+  app.get("/proxy/1inch/swap", rateLimit, swap);
 
   app.use("/api", router);
 
