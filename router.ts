@@ -14,7 +14,12 @@ import {
   SwapHistoryByAddress,
 } from "./controllers/1inch";
 
-import { getKatanaBalance, getKatanaPrice } from "./controllers/etherRoutes";
+import { getKatanaBalance, getKatanaPrice } from "./controllers/katanaRoutes";
+
+import {
+  getEthereumPrice,
+  getSushiPriceWithFallback,
+} from "./controllers/ethereumRoutes";
 
 const router = Router();
 
@@ -41,5 +46,7 @@ router.get("/proxy/1inch/profile/swap-history", SwapHistoryByAddress);
 
 router.get("/balance/katana", getKatanaBalance);
 router.get("/price/katana", getKatanaPrice);
+
+router.get("/price/ethereum", getSushiPriceWithFallback);
 
 export default router;

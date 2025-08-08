@@ -412,6 +412,15 @@ export async function getPriceData(
   }
 
   const isFresh = cached && Date.now() - cached.updated < REFRESH_AFTER_MS;
+  // console.log(
+  //   "isFresh",
+  //   isFresh,
+  //   Date.now(),
+  //   cached.updated,
+  //   Date.now() - cached.updated,
+  //   REFRESH_AFTER_MS
+  // );
+
   if (isFresh) {
     res.json(cached!.data);
     return;
