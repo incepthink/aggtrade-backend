@@ -4,6 +4,7 @@ import router from "./router";
 import {
   approveAllowance,
   approveTransaction,
+  getQuote,
   rateLimit,
   swap,
 } from "./controllers/controllers";
@@ -33,6 +34,7 @@ export function createApp(): express.Express {
   app.get("/proxy/1inch/approve/allowance", rateLimit, approveAllowance);
   app.get("/proxy/1inch/approve/transaction", rateLimit, approveTransaction);
   app.get("/proxy/1inch/swap", rateLimit, swap);
+  app.get("/proxy/1inch/quote", rateLimit, getQuote);
 
   app.use("/api", router);
 

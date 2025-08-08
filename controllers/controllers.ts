@@ -135,7 +135,7 @@ export async function getTokenPrice(
       return;
     }
 
-    console.log(addressOne, addressTwo);
+    // console.log(addressOne, addressTwo);
 
     const chain = (chainId?.toLowerCase() || "ethereum") as SupportedChain;
 
@@ -317,8 +317,9 @@ async function call1InchAPI(
 
   if (!response.ok) {
     const errorText = await response.text();
+    console.error("[1inch Error Response]", errorText); // Add this line
     throw new Error(
-      `1inch API error: ${response.status} ${response.statusText}`
+      `1inch API error: ${response.status} ${response.statusText} - ${errorText}`
     );
   }
 
@@ -331,11 +332,9 @@ export async function approveAllowance(req: Request, res: Response) {
     res.json(data);
   } catch (error) {
     console.error("Approve allowance error:", error);
-    res
-      .status(500)
-      .json({
-        error: error instanceof Error ? error.message : "Unknown error",
-      });
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
   }
 }
 
@@ -345,11 +344,9 @@ export async function approveTransaction(req: Request, res: Response) {
     res.json(data);
   } catch (error) {
     console.error("Approve transaction error:", error);
-    res
-      .status(500)
-      .json({
-        error: error instanceof Error ? error.message : "Unknown error",
-      });
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
   }
 }
 
@@ -359,11 +356,9 @@ export async function swap(req: Request, res: Response) {
     res.json(data);
   } catch (error) {
     console.error("Swap error:", error);
-    res
-      .status(500)
-      .json({
-        error: error instanceof Error ? error.message : "Unknown error",
-      });
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
   }
 }
 const limiter = new Bottleneck({
@@ -583,5 +578,35 @@ export async function getTokenPricesFromCoinGecko(
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unexpected server error";
     res.status(500).json({ status: "error", msg });
+  }
+}
+
+export async function getQuote(req: Request, res: Response): Promise<void> {
+  try {
+    // Validate required parameters
+    const { src, dst, amount } = req.query;
+
+    if (!src || !dst || !amount) {
+      res.status(400).json({
+        error: "Missing required parameters: src, dst, amount",
+        details: { type: "missing_parameters" },
+        type: "validation_error",
+      });
+      return;
+    }
+
+    console.log("Quote parameters:", { src, dst, amount });
+
+    const data = await call1InchAPI("quote", req.query);
+    console.log(data);
+
+    res.json(data);
+  } catch (error: any) {
+    console.error("Quote error:", error.message);
+    res.status(error.status || 500).json({
+      error: error.message,
+      details: error.details,
+      type: "quote_error",
+    });
   }
 }
