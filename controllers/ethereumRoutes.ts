@@ -66,15 +66,15 @@ function calculatePrice(
   const token0Lower = token0Address.toLowerCase();
   const token1Lower = token1Address.toLowerCase();
 
-  console.log(`USDC address: ${usdcAddress}`);
-  console.log(`Is token0 USDC? ${token0Lower === usdcAddress}`);
-  console.log(`Is token1 USDC? ${token1Lower === usdcAddress}`);
-  console.log(
-    `Is requested token token0? ${token0Lower === requestedTokenAddress}`
-  );
-  console.log(
-    `Is requested token token1? ${token1Lower === requestedTokenAddress}`
-  );
+  // console.log(`USDC address: ${usdcAddress}`);
+  // console.log(`Is token0 USDC? ${token0Lower === usdcAddress}`);
+  // console.log(`Is token1 USDC? ${token1Lower === usdcAddress}`);
+  // console.log(
+  //   `Is requested token token0? ${token0Lower === requestedTokenAddress}`
+  // );
+  // console.log(
+  //   `Is requested token token1? ${token1Lower === requestedTokenAddress}`
+  // );
 
   let finalPrice;
 
@@ -96,8 +96,8 @@ function calculatePrice(
     finalPrice = priceToken1PerToken0;
   }
 
-  console.log(`final price in USDC: ${finalPrice}`);
-  console.log(`=== End Debug ===\n`);
+  // console.log(`final price in USDC: ${finalPrice}`);
+  // console.log(`=== End Debug ===\n`);
 
   return finalPrice;
 }

@@ -41,6 +41,9 @@ import {
   clearEthereumTokenOHLCCache,
 } from "./controllers/ethereumTokenOHLCController";
 
+// Import Ethereum Pool OHLC controllers (swap-based with USDC pairs)
+import { getSimpleTokenOHLC } from "./controllers/simpleSwapOHLCController";
+
 // Import Katana SushiSwap Pool OHLC controllers
 import {
   getKatanaOHLCData,
@@ -52,6 +55,8 @@ import {
   getKatanaTokenOHLCData,
   clearKatanaTokenOHLCCache,
 } from "./controllers/katanaTokenOHLCController";
+
+import { getWETHQuoteOHLC } from "./controllers/wethQuoteOHLCController";
 
 const router = Router();
 
@@ -94,6 +99,10 @@ router.delete("/ohlc/sushiswap/cache", clearOHLCCacheSushi);
 // Ethereum Token OHLC routes (token-based implementation using TokenHourData/TokenDayData)
 router.get("/ohlc/ethereum/token", getEthereumTokenOHLCData);
 router.delete("/ohlc/ethereum/token/cache", clearEthereumTokenOHLCCache);
+
+// NEW: Ethereum Pool OHLC routes (swap-based with USDC pairs - simple and fast)
+router.get("/ohlc/ethereum/pool", getWETHQuoteOHLC);
+// router.delete("/ohlc/ethereum/pool/cache", clearEthereumSwapOHLCCache);
 
 // Katana SushiSwap Pool OHLC routes (original pool-based implementation)
 router.get("/ohlc/katana/pool", getKatanaOHLCData);
