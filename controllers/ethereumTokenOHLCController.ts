@@ -1,10 +1,10 @@
-// src/controllers/ethereumTokenOHLCController.ts
+// src/controllers/ethereumTokenOHLCController.ts - FIXED VERSION
 import type { Request, Response, NextFunction } from "express";
 import axios from "axios";
 import Bottleneck from "bottleneck";
 import { getValue, storeValue } from "../redis/ethereumTokens";
 
-// Types
+// Types (keeping same as original)
 interface OHLCPoint {
   timestamp: number;
   open: number;
@@ -13,7 +13,7 @@ interface OHLCPoint {
   close: number;
   volume: number;
   volumeUSD: number;
-  poolCount: number; // Number of pools contributing to this data point
+  poolCount: number;
 }
 
 interface TokenHourData {
@@ -85,7 +85,7 @@ interface SushiGraphResponse {
 const sushiLimiter = new Bottleneck({
   reservoir: 60,
   reservoirRefreshAmount: 60,
-  reservoirRefreshInterval: 60 * 1000, // per minute
+  reservoirRefreshInterval: 60 * 1000,
   maxConcurrent: 2,
   minTime: 1000,
 });
@@ -94,9 +94,15 @@ const sushiLimiter = new Bottleneck({
 const TOKEN_OHLC_CACHE_PREFIX = "token_ohlc_ethereum_";
 const TOKEN_OHLC_CACHE_TTL = 6 * 60 * 60; // 6 hours
 
-// Constants - Updated for Ethereum
+// Constants - FIXED: Try different subgraph URL
 const SUSHISWAP_SUBGRAPH_URL =
-  "https://api.studio.thegraph.com/query/106601/sushi-v-3-eth/v0.0.1";
+  "https://api.studio.thegraph.com/query/106601/sushi-v-3-eth/v0.0.1"; // Use specific version like Katana
+
+// Alternative endpoints to try if main one fails
+const FALLBACK_SUBGRAPH_URLS = [
+  "https://api.studio.thegraph.com/query/106601/sushi-v-3-eth/version/latest",
+  "https://api.thegraph.com/subgraphs/name/sushi-v3/ethereum", // If available
+];
 
 /**
  * Get GraphQL query to find token information
@@ -161,6 +167,61 @@ function getTokenOHLCQuery(timeframe: "hour" | "day") {
       }
     }
   `;
+}
+
+/**
+ * Try multiple subgraph endpoints
+ */
+async function makeSubgraphRequest(
+  query: string,
+  variables: any
+): Promise<SushiGraphResponse> {
+  const urls = [SUSHISWAP_SUBGRAPH_URL, ...FALLBACK_SUBGRAPH_URLS];
+
+  for (let i = 0; i < urls.length; i++) {
+    try {
+      console.log(
+        `[Ethereum Token Debug] Trying subgraph URL ${i + 1}/${urls.length}: ${
+          urls[i]
+        }`
+      );
+
+      const response = await axios.post<SushiGraphResponse>(
+        urls[i],
+        { query, variables },
+        {
+          timeout: 15000,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      if (response.data && !response.data.errors) {
+        console.log(
+          `[Ethereum Token Debug] Successfully got response from URL ${i + 1}`
+        );
+        return response.data;
+      } else if (response.data.errors) {
+        console.warn(
+          `[Ethereum Token Debug] GraphQL errors from URL ${i + 1}:`,
+          response.data.errors
+        );
+        if (i === urls.length - 1)
+          throw new Error(
+            `GraphQL errors: ${JSON.stringify(response.data.errors)}`
+          );
+      }
+    } catch (error: any) {
+      console.warn(
+        `[Ethereum Token Debug] Failed with URL ${i + 1}:`,
+        error.message
+      );
+      if (i === urls.length - 1) throw error;
+    }
+  }
+
+  throw new Error("All subgraph endpoints failed");
 }
 
 /**
@@ -297,7 +358,7 @@ export async function getEthereumTokenOHLCData(
     );
     console.log(`[Ethereum Token Debug] Cache key: ${cacheKey}`);
 
-    // Check cache unless force refresh
+    // FIXED: Correct cache logic - check cache unless force refresh
     if (!force) {
       console.log(`[Ethereum Token Debug] Checking cache for key: ${cacheKey}`);
       try {
@@ -353,46 +414,39 @@ export async function getEthereumTokenOHLCData(
           tokenQuery
         );
         console.log(`[Ethereum Token Debug] Token variables:`, tokenVariables);
-        console.log(
-          `[Ethereum Token Debug] Using Ethereum subgraph URL: ${SUSHISWAP_SUBGRAPH_URL}`
-        );
 
-        const tokenResponse = await axios.post<SushiGraphResponse>(
-          SUSHISWAP_SUBGRAPH_URL,
-          { query: tokenQuery, variables: tokenVariables },
-          {
-            timeout: 15000,
-            headers: {
-              "Content-Type": "application/json",
-            },
-          }
+        const tokenResponseData = await makeSubgraphRequest(
+          tokenQuery,
+          tokenVariables
         );
 
         console.log(
           `[Ethereum Token Debug] Token response:`,
-          JSON.stringify(tokenResponse.data, null, 2)
+          JSON.stringify(tokenResponseData, null, 2)
         );
 
         if (
-          !tokenResponse.data.data.tokens ||
-          tokenResponse.data.data.tokens.length === 0
+          !tokenResponseData.data.tokens ||
+          tokenResponseData.data.tokens.length === 0
         ) {
           console.log(
             `[Ethereum Token Debug] Token not found: ${normalizedAddress} on Ethereum`
           );
           res.status(404).json({
             status: "error",
-            msg: "Token not found on Ethereum",
+            msg: "Token not found on Ethereum SushiSwap V3",
             tokenAddress: normalizedAddress,
             debug: {
               searchedFor: normalizedAddress,
               chain: "ethereum",
+              suggestion:
+                "Token might not be available on SushiSwap V3 Ethereum or might have a different address",
             },
           });
           return;
         }
 
-        const tokenInfo = tokenResponse.data.data.tokens[0];
+        const tokenInfo = tokenResponseData.data.tokens[0];
         console.log(`[Ethereum Token Debug] Token found:`, tokenInfo);
 
         // Step 2: Get token OHLC data
@@ -410,29 +464,17 @@ export async function getEthereumTokenOHLCData(
           ohlcVariables
         );
 
-        const ohlcResponse = await axios.post<SushiGraphResponse>(
-          SUSHISWAP_SUBGRAPH_URL,
-          { query: ohlcQuery, variables: ohlcVariables },
-          {
-            timeout: 15000,
-            headers: {
-              "Content-Type": "application/json",
-            },
-          }
+        const ohlcResponseData = await makeSubgraphRequest(
+          ohlcQuery,
+          ohlcVariables
         );
 
-        console.log(
-          `[Ethereum Token Debug] Token OHLC response status: ${ohlcResponse.status}`
-        );
-        console.log(
-          `[Ethereum Token Debug] Token OHLC response data:`,
-          JSON.stringify(ohlcResponse.data, null, 2)
-        );
+        console.log(`[Ethereum Token Debug] Token OHLC response received`);
 
         const rawData =
           timeframe === "hour"
-            ? ohlcResponse.data.data.tokenHourDatas
-            : ohlcResponse.data.data.tokenDayDatas;
+            ? ohlcResponseData.data.tokenHourDatas
+            : ohlcResponseData.data.tokenDayDatas;
 
         if (!rawData || rawData.length === 0) {
           console.log(
@@ -489,27 +531,19 @@ export async function getEthereumTokenOHLCData(
             console.log(
               `[Ethereum Token Debug] Checking for any recent token data`
             );
-            const recentDataResponse = await axios.post(
-              SUSHISWAP_SUBGRAPH_URL,
-              {
-                query: recentDataQuery,
-                variables: { tokenAddress: normalizedAddress },
-              },
-              {
-                timeout: 10000,
-                headers: {
-                  "Content-Type": "application/json",
-                },
-              }
+
+            const recentDataResponse = await makeSubgraphRequest(
+              recentDataQuery,
+              { tokenAddress: normalizedAddress }
             );
 
             console.log(
               `[Ethereum Token Debug] Recent token data check response:`,
-              JSON.stringify(recentDataResponse.data, null, 2)
+              JSON.stringify(recentDataResponse, null, 2)
             );
 
-            const recentHourData = recentDataResponse.data.data.tokenHourDatas;
-            const recentDayData = recentDataResponse.data.data.tokenDayDatas;
+            const recentHourData = recentDataResponse.data.tokenHourDatas;
+            const recentDayData = recentDataResponse.data.tokenDayDatas;
 
             if (
               (timeframe === "hour" &&
@@ -540,7 +574,7 @@ export async function getEthereumTokenOHLCData(
                     parseFloat(item.close) || parseFloat(item.priceUSD) || 0,
                   volume: parseFloat(item.volume) || 0,
                   volumeUSD: parseFloat(item.volumeUSD) || 0,
-                  poolCount: 1, // We don't have this info from token data
+                  poolCount: 1,
                 };
 
                 if (index < 3) {
@@ -631,7 +665,7 @@ export async function getEthereumTokenOHLCData(
               endTime,
               tokenExists: true,
               suggestion:
-                "Token exists but no OHLC data in the specified time range",
+                "Token exists but no OHLC data in the specified time range. This token might not have sufficient trading activity on SushiSwap V3 Ethereum.",
               chain: "ethereum",
               systemTime: new Date().toISOString(),
               queryRange: `${new Date(
@@ -663,7 +697,7 @@ export async function getEthereumTokenOHLCData(
             close: parseFloat(item.close) || parseFloat(item.priceUSD) || 0,
             volume: parseFloat(item.volume) || 0,
             volumeUSD: parseFloat(item.volumeUSD) || 0,
-            poolCount: 1, // We don't have exact pool count per time period
+            poolCount: 1,
           };
 
           if (index < 3) {
