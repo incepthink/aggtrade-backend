@@ -1,45 +1,33 @@
-// src/controllers/katanaSushiswapOHLCController.ts
+// src/controllers/katanaSushiswapSwapController.ts
 import type { Request, Response, NextFunction } from "express";
 import axios from "axios";
 import Bottleneck from "bottleneck";
-import { getValue, storeValue } from "../redis";
+import { getValue, storeValue } from "../redis/katanaTokens";
 
 // Types
-interface OHLCPoint {
-  timestamp: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
-
-interface PoolOHLCData {
+interface SwapData {
   id: string;
-  periodStartUnix: number;
-  date: number;
+  timestamp: string;
+  token0: {
+    id: string;
+    symbol: string;
+    name: string;
+    decimals: string;
+  };
+  token1: {
+    id: string;
+    symbol: string;
+    name: string;
+    decimals: string;
+  };
+  token0PriceUSD: string;
+  token1PriceUSD: string;
+  amount0USD: string;
+  amount1USD: string;
+  amountUSD: string;
   pool: {
     id: string;
-    token0: {
-      id: string;
-      symbol: string;
-      name: string;
-      decimals: string;
-    };
-    token1: {
-      id: string;
-      symbol: string;
-      name: string;
-      decimals: string;
-    };
   };
-  open: string;
-  high: string;
-  low: string;
-  close: string;
-  volumeUSD: string;
-  token0Price: string;
-  token1Price: string;
 }
 
 interface Pool {
@@ -57,13 +45,52 @@ interface Pool {
     decimals: string;
   };
   feeTier: string;
+  totalValueLockedUSD: string;
   volumeUSD: string;
+}
+
+interface StoredSwapData {
+  swaps: ProcessedSwap[];
+  metadata: {
+    token: {
+      address: string;
+      name: string;
+      symbol: string;
+      decimals: string;
+    };
+    pool: {
+      id: string;
+      address: string;
+      token0: any;
+      token1: any;
+      feeTier: string;
+      totalValueLockedUSD: number;
+      volumeUSD: number;
+    };
+    isToken0: boolean;
+    quoteToken: any;
+    lastUpdate: number; // Last time we updated the data
+    lastSwapTimestamp: number; // Timestamp of most recent swap
+    dataRange: {
+      start: number;
+      end: number;
+    };
+    chain: string;
+    dexId: string;
+  };
+}
+
+interface ProcessedSwap {
+  id: string;
+  timestamp: number;
+  tokenPriceUSD: number;
+  tokenVolumeUSD: number;
+  totalVolumeUSD: number;
 }
 
 interface SushiGraphResponse {
   data: {
-    poolHourDatas?: PoolOHLCData[];
-    poolDayDatas?: PoolOHLCData[];
+    swaps?: SwapData[];
     pools?: Pool[];
   };
   errors?: any[];
@@ -79,28 +106,30 @@ const sushiLimiter = new Bottleneck({
 });
 
 // Cache configuration
-const OHLC_CACHE_PREFIX = "ohlc_katana_pool_";
-const OHLC_CACHE_TTL = 5 * 60; // 5 minutes
+const FULL_SWAP_DATA_PREFIX = "full_swaps_katana_";
+const FULL_SWAP_DATA_TTL = 365 * 24 * 60 * 60; // 365 days (1 year)
+const UPDATE_LOCK_PREFIX = "update_lock_katana_";
+const UPDATE_LOCK_TTL = 60 * 60; // 1 hour lock
 
-// Constants - Updated for Katana
-const KATANA_SUBGRAPH_URL =
-  "https://api.studio.thegraph.com/query/106601/sushi-v-3-katana/v0.0.1";
-const KATANA_USDC_ADDRESS = "0x203A662b0BD271A6ed5a60EdFbd04bFce608FD36"; // Katana USDC
+// Constants
+const KATANA_SUBGRAPH_URL = "https://api.studio.thegraph.com/query/106601/sushi-v-3-katana/version/latest";
+const FULL_DATA_DAYS = 365;
+const UPDATE_INTERVAL_HOURS = 1;
 
 /**
- * Get GraphQL query to find pools with token and USDC
+ * Get GraphQL query to find pools containing a specific token, ordered by TVL
  */
-function getPoolsQuery() {
+function getPoolsByTVLQuery() {
   return `
-    query GetPools($token0: String!, $token1: String!) {
+    query GetPoolsByTVL($tokenAddress: String!) {
       pools(
         where: {
           or: [
-            { token0: $token0, token1: $token1 },
-            { token0: $token1, token1: $token0 }
+            { token0: $tokenAddress },
+            { token1: $tokenAddress }
           ]
         }
-        orderBy: volumeUSD
+        orderBy: totalValueLockedUSD
         orderDirection: desc
         first: 10
       ) {
@@ -118,6 +147,7 @@ function getPoolsQuery() {
           decimals
         }
         feeTier
+        totalValueLockedUSD
         volumeUSD
       }
     }
@@ -125,112 +155,187 @@ function getPoolsQuery() {
 }
 
 /**
- * Get GraphQL query for pool OHLC data
+ * Get GraphQL query for swap data from a specific pool with time filtering
  */
-function getPoolOHLCQuery(timeframe: "hour" | "day") {
-  const entityName = timeframe === "hour" ? "poolHourDatas" : "poolDayDatas";
-  const timeField = timeframe === "hour" ? "periodStartUnix" : "date";
-
+function getSwapsQuery() {
   return `
-    query GetPoolOHLC($poolId: String!, $startTime: Int!, $endTime: Int!, $first: Int!) {
-      ${entityName}(
+    query GetSwaps($poolId: String!, $startTime: Int!, $endTime: Int!, $first: Int!, $skip: Int!) {
+      swaps(
         where: {
           pool: $poolId,
-          ${timeField}_gte: $startTime,
-          ${timeField}_lte: $endTime
+          timestamp_gte: $startTime,
+          timestamp_lte: $endTime
         }
-        orderBy: ${timeField}
+        orderBy: timestamp
         orderDirection: asc
         first: $first
+        skip: $skip
       ) {
         id
-        ${timeField === "date" ? "date" : "periodStartUnix"}
+        timestamp
+        token0 {
+          id
+          symbol
+          name
+          decimals
+        }
+        token1 {
+          id
+          symbol
+          name
+          decimals
+        }
+        token0PriceUSD
+        token1PriceUSD
+        amount0USD
+        amount1USD
+        amountUSD
         pool {
           id
-          token0 {
-            id
-            symbol
-            name
-            decimals
-          }
-          token1 {
-            id
-            symbol
-            name
-            decimals
-          }
         }
-        open
-        high
-        low
-        close
-        volumeUSD
-        token0Price
-        token1Price
       }
     }
   `;
 }
 
 /**
- * Convert resolution to timeframe
+ * Calculate time range for data retrieval
  */
-function getTimeframe(resolution: string): "hour" | "day" {
-  return resolution === "day" ? "day" : "hour";
-}
-
-/**
- * Calculate time range
- */
-function getTimeRange(days: number, timeframe: "hour" | "day") {
+function getFullTimeRange(): { startTime: number; endTime: number } {
   const endTime = Math.floor(Date.now() / 1000);
-  const startTime = endTime - days * 24 * 60 * 60;
-
-  console.log(
-    `[Katana Debug] Current timestamp: ${endTime} (${new Date(
-      endTime * 1000
-    ).toISOString()})`
-  );
-  console.log(`[Katana Debug] Calculating time range for ${days} days:`, {
-    endTime,
-    startTime,
-    endTimeDate: new Date(endTime * 1000).toISOString(),
-    startTimeDate: new Date(startTime * 1000).toISOString(),
-  });
-
-  if (timeframe === "day") {
-    const dayStartTime = Math.floor(startTime / 86400);
-    const dayEndTime = Math.floor(endTime / 86400);
-    console.log(`[Katana Debug] Day timeframe - converted to days:`, {
-      startTime: dayStartTime,
-      endTime: dayEndTime,
-      startDate: new Date(dayStartTime * 86400 * 1000).toISOString(),
-      endDate: new Date(dayEndTime * 86400 * 1000).toISOString(),
-    });
-    return {
-      startTime: dayStartTime,
-      endTime: dayEndTime,
-    };
-  }
-
-  console.log(`[Katana Debug] Hour timeframe - using unix timestamps:`, {
-    startTime,
-    endTime,
-  });
+  const startTime = endTime - (FULL_DATA_DAYS * 24 * 60 * 60);
   return { startTime, endTime };
 }
 
 /**
- * Get OHLC data from Katana SushiSwap subgraph using pool data
+ * Calculate incremental time range (only new data since last update)
  */
-export async function getKatanaOHLCData(
+function getIncrementalTimeRange(lastSwapTimestamp: number): { startTime: number; endTime: number } {
+  const endTime = Math.floor(Date.now() / 1000);
+  // Start from last swap + 1 second to avoid duplicates
+  const startTime = lastSwapTimestamp + 1;
+  return { startTime, endTime };
+}
+
+/**
+ * Fetch swaps with pagination
+ */
+async function fetchSwaps(
+  poolId: string,
+  startTime: number,
+  endTime: number,
+  maxSwaps: number = 50000 // Reasonable limit to prevent memory issues
+): Promise<SwapData[]> {
+  const allSwaps: SwapData[] = [];
+  let hasMore = true;
+  let skip = 0;
+  const batchSize = 1000;
+
+  console.log(`[Katana Incremental] Fetching swaps for pool ${poolId} from ${startTime} to ${endTime}`);
+
+  while (hasMore && allSwaps.length < maxSwaps) {
+    const swapsQuery = getSwapsQuery();
+    const variables = {
+      poolId,
+      startTime,
+      endTime,
+      first: Math.min(batchSize, maxSwaps - allSwaps.length),
+      skip,
+    };
+
+    console.log(`[Katana Incremental] Batch: skip=${skip}, requesting=${variables.first}`);
+
+    const response = await axios.post<SushiGraphResponse>(
+      KATANA_SUBGRAPH_URL,
+      { query: swapsQuery, variables },
+      {
+        timeout: 15000,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+
+    const swaps = response.data.data.swaps;
+
+    if (!swaps || swaps.length === 0) {
+      hasMore = false;
+      break;
+    }
+
+    allSwaps.push(...swaps);
+    
+    if (swaps.length < variables.first) {
+      hasMore = false;
+    } else {
+      skip += batchSize;
+    }
+
+    // Rate limiting delay
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+
+  console.log(`[Katana Incremental] Fetched ${allSwaps.length} swaps`);
+  return allSwaps;
+}
+
+/**
+ * Process raw swaps into our format
+ */
+function processSwaps(rawSwaps: SwapData[], tokenAddress: string, isToken0: boolean): ProcessedSwap[] {
+  return rawSwaps.map(swap => ({
+    id: swap.id,
+    timestamp: parseInt(swap.timestamp) * 1000, // Convert to milliseconds
+    tokenPriceUSD: isToken0 
+      ? parseFloat(swap.token0PriceUSD || "0")
+      : parseFloat(swap.token1PriceUSD || "0"),
+    tokenVolumeUSD: isToken0
+      ? parseFloat(swap.amount0USD || "0") 
+      : parseFloat(swap.amount1USD || "0"),
+    totalVolumeUSD: parseFloat(swap.amountUSD || "0"),
+  }));
+}
+
+/**
+ * Merge new swaps with existing data, removing duplicates
+ */
+function mergeSwaps(existingSwaps: ProcessedSwap[], newSwaps: ProcessedSwap[]): ProcessedSwap[] {
+  const swapMap = new Map<string, ProcessedSwap>();
+  
+  // Add existing swaps
+  for (const swap of existingSwaps) {
+    swapMap.set(swap.id, swap);
+  }
+  
+  // Add new swaps (will overwrite duplicates)
+  for (const swap of newSwaps) {
+    swapMap.set(swap.id, swap);
+  }
+  
+  // Convert back to array and sort by timestamp
+  const mergedSwaps = Array.from(swapMap.values());
+  mergedSwaps.sort((a, b) => a.timestamp - b.timestamp);
+  
+  return mergedSwaps;
+}
+
+/**
+ * Check if we need to update data (every hour)
+ */
+function needsUpdate(lastUpdate: number): boolean {
+  const now = Math.floor(Date.now() / 1000);
+  const hoursSinceUpdate = (now - lastUpdate) / 3600;
+  return hoursSinceUpdate >= UPDATE_INTERVAL_HOURS;
+}
+
+/**
+ * Get swap data with incremental updates
+ */
+export async function getKatanaSwapData(
   req: Request<
     {},
     {},
     {},
     {
       tokenAddress?: string;
-      resolution?: string;
       days?: string;
       force?: string;
     }
@@ -239,18 +344,12 @@ export async function getKatanaOHLCData(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { tokenAddress, resolution = "hour", days = "30", force } = req.query;
+    const { tokenAddress, days = "365", force } = req.query;
 
-    console.log(`[Katana Debug] Request received with params:`, {
-      tokenAddress,
-      resolution,
-      days,
-      force,
-    });
+    console.log(`[Katana Incremental] Request received:`, { tokenAddress, days, force });
 
     // Validate input
     if (!tokenAddress) {
-      console.log(`[Katana Debug] Missing tokenAddress parameter`);
       res.status(400).json({
         status: "error",
         msg: "tokenAddress parameter is required",
@@ -259,7 +358,6 @@ export async function getKatanaOHLCData(
     }
 
     if (!/^0x[a-f0-9]{40}$/i.test(tokenAddress)) {
-      console.log(`[Katana Debug] Invalid address format: ${tokenAddress}`);
       res.status(422).json({
         status: "error",
         msg: "Invalid address format",
@@ -267,21 +365,8 @@ export async function getKatanaOHLCData(
       return;
     }
 
-    const validResolutions = ["hour", "day"];
-    if (!validResolutions.includes(resolution)) {
-      console.log(`[Katana Debug] Invalid resolution: ${resolution}`);
-      res.status(400).json({
-        status: "error",
-        msg: `Invalid resolution. Must be one of: ${validResolutions.join(
-          ", "
-        )}`,
-      });
-      return;
-    }
-
     const daysNum = parseInt(days);
     if (isNaN(daysNum) || daysNum < 1 || daysNum > 365) {
-      console.log(`[Katana Debug] Invalid days parameter: ${days}`);
       res.status(400).json({
         status: "error",
         msg: "Days must be a number between 1 and 365",
@@ -290,510 +375,294 @@ export async function getKatanaOHLCData(
     }
 
     const normalizedAddress = tokenAddress.toLowerCase();
-    const timeframe = getTimeframe(resolution);
-    const cacheKey = `${OHLC_CACHE_PREFIX}${normalizedAddress}_${resolution}_${days}`;
+    const cacheKey = `${FULL_SWAP_DATA_PREFIX}${normalizedAddress}`;
+    const lockKey = `${UPDATE_LOCK_PREFIX}${normalizedAddress}`;
 
-    console.log(`[Katana Debug] Normalized address: ${normalizedAddress}`);
-    console.log(`[Katana Debug] Cache key: ${cacheKey}`);
+    console.log(`[Katana Incremental] Cache key: ${cacheKey}`);
 
-    // Check cache unless force refresh
-    if (!force) {
-      console.log(`[Katana Debug] Checking cache for key: ${cacheKey}`);
+    await sushiLimiter.schedule(async () => {
       try {
-        const cached = await getValue(cacheKey);
-        if (cached) {
-          console.log(
-            `[Katana Debug] Cache hit for OHLC: ${normalizedAddress}`
+        // Step 1: Try to load existing data
+        let storedData: StoredSwapData | null = null;
+        try {
+          const cached = await getValue(cacheKey);
+          if (cached) {
+            storedData = JSON.parse(cached);
+            console.log(`[Katana Incremental] Found existing data:`, {
+              swapsCount: storedData?.swaps.length,
+              lastUpdate: storedData?.metadata.lastUpdate,
+              lastSwapTimestamp: storedData?.metadata.lastSwapTimestamp,
+            });
+          }
+        } catch (cacheError) {
+          console.warn(`[Katana Incremental] Cache read error:`, cacheError);
+        }
+
+        // Step 2: Determine if we need to update
+        const shouldUpdate = force || !storedData || needsUpdate(storedData.metadata.lastUpdate);
+        
+        if (!shouldUpdate) {
+          console.log(`[Katana Incremental] Data is fresh, returning cached data`);
+          
+          // Filter data to requested time range
+          const requestedStartTime = Math.floor(Date.now() / 1000) - (daysNum * 24 * 60 * 60);
+          const filteredSwaps = storedData!.swaps.filter(
+            swap => swap.timestamp >= requestedStartTime * 1000
           );
-          const cachedData = JSON.parse(cached);
+
+          const responseData = {
+            ...storedData!,
+            swaps: filteredSwaps,
+            metadata: {
+              ...storedData!.metadata,
+              totalSwaps: filteredSwaps.length,
+              timeRange: {
+                start: requestedStartTime * 1000,
+                end: Date.now(),
+                days: daysNum,
+              },
+            },
+          };
+
           res.status(200).json({
             status: "success",
-            data: cachedData,
+            data: responseData,
             source: "katana-sushiswap",
             cached: true,
             tokenAddress: normalizedAddress,
-            resolution,
-            count: cachedData.chart?.length || 0,
-          });
-          return;
-        } else {
-          console.log(`[Katana Debug] Cache miss for key: ${cacheKey}`);
-        }
-      } catch (cacheError) {
-        console.warn(
-          `[Katana Debug] Cache read error for ${cacheKey}:`,
-          cacheError
-        );
-      }
-    } else {
-      console.log(`[Katana Debug] Force refresh requested, skipping cache`);
-    }
-
-    // Rate limit the request
-    console.log(
-      `[Katana Debug] Entering rate limiter for token: ${normalizedAddress}`
-    );
-    await sushiLimiter.schedule(async () => {
-      try {
-        console.log(
-          `[Katana Debug] Rate limiter executed, finding pools for: ${normalizedAddress}`
-        );
-
-        // Step 1: Find pools with this token and USDC
-        const poolsQuery = getPoolsQuery();
-        const poolsVariables = {
-          token0: normalizedAddress,
-          token1: KATANA_USDC_ADDRESS,
-        };
-
-        console.log(`[Katana Debug] Finding pools with query:`, poolsQuery);
-        console.log(`[Katana Debug] Pools variables:`, poolsVariables);
-        console.log(
-          `[Katana Debug] Using Katana subgraph URL: ${KATANA_SUBGRAPH_URL}`
-        );
-        console.log(
-          `[Katana Debug] Using Katana USDC address: ${KATANA_USDC_ADDRESS}`
-        );
-
-        const poolsResponse = await axios.post<SushiGraphResponse>(
-          KATANA_SUBGRAPH_URL,
-          { query: poolsQuery, variables: poolsVariables },
-          {
-            timeout: 15000,
-            headers: {
-              "Content-Type": "application/json",
-            },
-          }
-        );
-
-        console.log(
-          `[Katana Debug] Pools response:`,
-          JSON.stringify(poolsResponse.data, null, 2)
-        );
-
-        if (
-          !poolsResponse.data.data.pools ||
-          poolsResponse.data.data.pools.length === 0
-        ) {
-          console.log(
-            `[Katana Debug] No pools found for token: ${normalizedAddress} paired with USDC on Katana`
-          );
-          res.status(404).json({
-            status: "error",
-            msg: "No pools found for this token paired with USDC on Katana",
-            tokenAddress: normalizedAddress,
-            debug: {
-              searchedFor: `${normalizedAddress}-${KATANA_USDC_ADDRESS} pools`,
-              foundPools: 0,
-              chain: "katana",
-            },
+            count: filteredSwaps.length,
+            poolId: storedData!.metadata.pool.id,
+            poolTVL: storedData!.metadata.pool.totalValueLockedUSD.toString(),
+            chain: "katana",
+            updateStatus: "fresh",
           });
           return;
         }
 
-        // Use the pool with highest volume
-        const selectedPool = poolsResponse.data.data.pools[0];
-        console.log(`[Katana Debug] Selected pool:`, selectedPool);
-
-        // Determine if token is token0 or token1 in the pool
-        const isToken0 =
-          selectedPool.token0.id.toLowerCase() === normalizedAddress;
-        const baseToken = isToken0 ? selectedPool.token0 : selectedPool.token1;
-        const quoteToken = isToken0 ? selectedPool.token1 : selectedPool.token0;
-
-        console.log(`[Katana Debug] Pool configuration:`, {
-          poolId: selectedPool.id,
-          isToken0,
-          baseToken: baseToken.symbol,
-          quoteToken: quoteToken.symbol,
-        });
-
-        // Step 2: Get OHLC data for this pool
-        const { startTime, endTime } = getTimeRange(daysNum, timeframe);
-        const ohlcQuery = getPoolOHLCQuery(timeframe);
-        const ohlcVariables = {
-          poolId: selectedPool.id,
-          startTime,
-          endTime,
-          first: 1000,
-        };
-
-        console.log(
-          `[Katana Debug] Fetching OHLC data with variables:`,
-          ohlcVariables
-        );
-
-        const ohlcResponse = await axios.post<SushiGraphResponse>(
-          KATANA_SUBGRAPH_URL,
-          { query: ohlcQuery, variables: ohlcVariables },
-          {
-            timeout: 15000,
-            headers: {
-              "Content-Type": "application/json",
-            },
-          }
-        );
-
-        console.log(
-          `[Katana Debug] OHLC response status: ${ohlcResponse.status}`
-        );
-        console.log(
-          `[Katana Debug] OHLC response data:`,
-          JSON.stringify(ohlcResponse.data, null, 2)
-        );
-
-        const rawData =
-          timeframe === "hour"
-            ? ohlcResponse.data.data.poolHourDatas
-            : ohlcResponse.data.data.poolDayDatas;
-
-        if (!rawData || rawData.length === 0) {
-          console.log(
-            `[Katana Debug] No OHLC data found for pool: ${selectedPool.id}`
-          );
-
-          // Let's check what data is actually available for this pool
-          const recentDataQuery = `
-            query GetRecentPoolData($poolId: String!) {
-              poolDayDatas(where: { pool: $poolId }, first: 10, orderBy: date, orderDirection: desc) {
-                id
-                date
-                open
-                high
-                low
-                close
-                volumeUSD
-                token0Price
-                token1Price
-              }
-              poolHourDatas(where: { pool: $poolId }, first: 10, orderBy: periodStartUnix, orderDirection: desc) {
-                id
-                periodStartUnix
-                open
-                high
-                low
-                close
-                volumeUSD
-                token0Price
-                token1Price
-              }
-            }
-          `;
-
-          try {
-            console.log(`[Katana Debug] Checking for any recent pool data`);
-            const recentDataResponse = await axios.post(
-              KATANA_SUBGRAPH_URL,
-              {
-                query: recentDataQuery,
-                variables: { poolId: selectedPool.id },
-              },
-              {
-                timeout: 10000,
-                headers: {
-                  "Content-Type": "application/json",
-                },
-              }
-            );
-
-            console.log(
-              `[Katana Debug] Recent pool data check response:`,
-              JSON.stringify(recentDataResponse.data, null, 2)
-            );
-
-            // If we find recent data, let's use it
-            const recentHourData = recentDataResponse.data.data.poolHourDatas;
-            const recentDayData = recentDataResponse.data.data.poolDayDatas;
-
-            if (
-              (timeframe === "hour" &&
-                recentHourData &&
-                recentHourData.length > 0) ||
-              (timeframe === "day" && recentDayData && recentDayData.length > 0)
-            ) {
-              console.log(`[Katana Debug] Found recent data, using it instead`);
-
-              // Use the recent data we found
-              const useableData =
-                timeframe === "hour" ? recentHourData : recentDayData;
-
-              // Convert to our format
-              const ohlcData: OHLCPoint[] = useableData.map((item, index) => {
-                const timestamp =
-                  timeframe === "hour"
-                    ? item.periodStartUnix
-                    : (item as any).date * 86400;
-
-                const price = isToken0
-                  ? parseFloat(item.token0Price)
-                  : 1 / parseFloat(item.token1Price);
-
-                const processedItem = {
-                  timestamp: timestamp * 1000,
-                  open: parseFloat(item.open) || price,
-                  high: parseFloat(item.high) || price,
-                  low: parseFloat(item.low) || price,
-                  close: parseFloat(item.close) || price,
-                  volume: parseFloat(item.volumeUSD) || 0,
-                };
-
-                if (index < 3) {
-                  console.log(
-                    `[Katana Debug] Processed recent item ${index}:`,
-                    {
-                      original: item,
-                      processed: processedItem,
-                      isToken0,
-                      calculatedPrice: price,
-                    }
-                  );
-                }
-
-                return processedItem;
-              });
-
-              // Prepare response data with recent data
-              const responseData = {
-                chart: ohlcData,
-                metadata: {
-                  pair: {
-                    address: `${normalizedAddress}-${KATANA_USDC_ADDRESS}`,
-                    baseToken: {
-                      address: baseToken.id,
-                      name: baseToken.name,
-                      symbol: baseToken.symbol,
-                      decimals: baseToken.decimals,
-                    },
-                    quoteToken: {
-                      address: quoteToken.id,
-                      name: quoteToken.name,
-                      symbol: quoteToken.symbol,
-                    },
-                    dexId: "katana-sushiswap",
-                    poolId: selectedPool.id,
-                    feeTier: selectedPool.feeTier,
-                    url: `https://katana.roninchain.com/pool/${selectedPool.id}`,
-                    chain: "katana",
-                  },
-                  priceUsd: ohlcData[ohlcData.length - 1]?.close || 0,
-                  currency: "USD",
-                  dataSource: "subgraph",
-                  note: "Using most recent available data",
-                },
-              };
-
-              // Cache the result
-              try {
-                await storeValue(
-                  cacheKey,
-                  JSON.stringify(responseData),
-                  OHLC_CACHE_TTL
-                );
-                console.log(
-                  `[Katana Debug] Successfully cached recent OHLC data`
-                );
-              } catch (cacheError) {
-                console.warn(`[Katana Debug] Cache write error:`, cacheError);
-              }
-
-              console.log(
-                `[Katana Debug] Sending successful response with recent data`
+        // Step 3: Check update lock to prevent concurrent updates
+        try {
+          const lockExists = await getValue(lockKey);
+          if (lockExists && !force) {
+            console.log(`[Katana Incremental] Update in progress, returning stale data`);
+            
+            if (storedData) {
+              const requestedStartTime = Math.floor(Date.now() / 1000) - (daysNum * 24 * 60 * 60);
+              const filteredSwaps = storedData.swaps.filter(
+                swap => swap.timestamp >= requestedStartTime * 1000
               );
+
               res.status(200).json({
                 status: "success",
-                data: responseData,
-                source: "katana-sushiswap",
-                cached: false,
-                tokenAddress: normalizedAddress,
-                resolution,
-                count: ohlcData.length,
-                dataSource: "subgraph",
-                poolId: selectedPool.id,
-                chain: "katana",
-                note: "Using most recent available data",
+                data: { ...storedData, swaps: filteredSwaps },
+                cached: true,
+                updateStatus: "updating",
+                message: "Data update in progress, returning existing data",
               });
               return;
             }
-          } catch (recentDataError) {
-            console.error(
-              `[Katana Debug] Recent data check failed:`,
-              recentDataError
-            );
           }
-
-          res.status(404).json({
-            status: "error",
-            msg: "No OHLC data available for this pool on Katana",
-            tokenAddress: normalizedAddress,
-            debug: {
-              poolId: selectedPool.id,
-              timeframe,
-              startTime,
-              endTime,
-              poolExists: true,
-              suggestion:
-                "Pool exists but no OHLC data in the specified time range",
-              chain: "katana",
-              systemTime: new Date().toISOString(),
-              queryRange: `${new Date(
-                startTime * (timeframe === "day" ? 86400 : 1) * 1000
-              ).toISOString()} to ${new Date(
-                endTime * (timeframe === "day" ? 86400 : 1) * 1000
-              ).toISOString()}`,
-            },
-          });
-          return;
+        } catch (lockError) {
+          console.warn(`[Katana Incremental] Lock check error:`, lockError);
         }
 
-        console.log(
-          `[Katana Debug] Processing ${rawData.length} pool OHLC points`
-        );
+        // Step 4: Set update lock
+        try {
+          await storeValue(lockKey, "updating", UPDATE_LOCK_TTL);
+        } catch (lockError) {
+          console.warn(`[Katana Incremental] Failed to set update lock:`, lockError);
+        }
 
-        // Convert to our format
-        const ohlcData: OHLCPoint[] = rawData.map((item, index) => {
-          const timestamp =
-            timeframe === "hour"
-              ? item.periodStartUnix
-              : (item as any).date * 86400;
+        console.log(`[Katana Incremental] Updating data for token: ${normalizedAddress}`);
 
-          const price = isToken0
-            ? parseFloat(item.token0Price)
-            : 1 / parseFloat(item.token1Price);
-
-          const processedItem = {
-            timestamp: timestamp * 1000,
-            open: parseFloat(item.open) || price,
-            high: parseFloat(item.high) || price,
-            low: parseFloat(item.low) || price,
-            close: parseFloat(item.close) || price,
-            volume: parseFloat(item.volumeUSD) || 0,
+        // Step 5: Find highest TVL pool (only if we don't have pool info)
+        let selectedPool: Pool;
+        
+        if (storedData?.metadata.pool) {
+          // Use existing pool info
+          selectedPool = {
+            id: storedData.metadata.pool.id,
+            token0: storedData.metadata.pool.token0,
+            token1: storedData.metadata.pool.token1,
+            feeTier: storedData.metadata.pool.feeTier,
+            totalValueLockedUSD: storedData.metadata.pool.totalValueLockedUSD.toString(),
+            volumeUSD: storedData.metadata.pool.volumeUSD.toString(),
           };
+          console.log(`[Katana Incremental] Using existing pool: ${selectedPool.id}`);
+        } else {
+          // Find pool with highest TVL
+          const poolsQuery = getPoolsByTVLQuery();
+          const poolsVariables = { tokenAddress: normalizedAddress };
 
-          if (index < 3) {
-            console.log(`[Katana Debug] Processed pool item ${index}:`, {
-              original: item,
-              processed: processedItem,
-              isToken0,
-              calculatedPrice: price,
+          const poolsResponse = await axios.post<SushiGraphResponse>(
+            KATANA_SUBGRAPH_URL,
+            { query: poolsQuery, variables: poolsVariables },
+            {
+              timeout: 15000,
+              headers: { "Content-Type": "application/json" },
+            }
+          );
+
+          if (!poolsResponse.data.data.pools || poolsResponse.data.data.pools.length === 0) {
+            res.status(404).json({
+              status: "error",
+              msg: "No pools found for this token on Katana",
+              tokenAddress: normalizedAddress,
             });
+            return;
           }
 
-          return processedItem;
-        });
+          selectedPool = poolsResponse.data.data.pools[0];
+          console.log(`[Katana Incremental] Found highest TVL pool:`, {
+            poolId: selectedPool.id,
+            tvl: selectedPool.totalValueLockedUSD,
+          });
+        }
 
-        console.log(
-          `[Katana Debug] Successfully processed ${ohlcData.length} pool OHLC points`
-        );
+        // Determine token position in pool
+        const isToken0 = selectedPool.token0.id.toLowerCase() === normalizedAddress;
+        const baseToken = isToken0 ? selectedPool.token0 : selectedPool.token1;
+        const quoteToken = isToken0 ? selectedPool.token1 : selectedPool.token0;
 
-        // Prepare response data
-        const responseData = {
-          chart: ohlcData,
+        // Step 6: Fetch new data (incremental or full)
+        let newSwaps: SwapData[];
+        
+        if (storedData && storedData.metadata.lastSwapTimestamp) {
+          // Incremental update: only fetch new data
+          const { startTime, endTime } = getIncrementalTimeRange(
+            Math.floor(storedData.metadata.lastSwapTimestamp / 1000)
+          );
+          
+          console.log(`[Katana Incremental] Incremental fetch from ${startTime} to ${endTime}`);
+          newSwaps = await fetchSwaps(selectedPool.id, startTime, endTime);
+          console.log(`[Katana Incremental] Fetched ${newSwaps.length} new swaps`);
+        } else {
+          // Full fetch: get all data for 365 days
+          const { startTime, endTime } = getFullTimeRange();
+          
+          console.log(`[Katana Incremental] Full fetch from ${startTime} to ${endTime}`);
+          newSwaps = await fetchSwaps(selectedPool.id, startTime, endTime);
+          console.log(`[Katana Incremental] Fetched ${newSwaps.length} total swaps`);
+        }
+
+        // Step 7: Process and merge data
+        const processedNewSwaps = processSwaps(newSwaps, normalizedAddress, isToken0);
+        const existingSwaps = storedData?.swaps || [];
+        const allSwaps = mergeSwaps(existingSwaps, processedNewSwaps);
+
+        console.log(`[Katana Incremental] Merged data: ${existingSwaps.length} existing + ${processedNewSwaps.length} new = ${allSwaps.length} total`);
+
+        // Step 8: Prepare updated stored data
+        const now = Math.floor(Date.now() / 1000);
+        const lastSwapTimestamp = allSwaps.length > 0 
+          ? Math.max(...allSwaps.map(s => s.timestamp))
+          : now * 1000;
+
+        const updatedStoredData: StoredSwapData = {
+          swaps: allSwaps,
           metadata: {
-            pair: {
-              address: `${normalizedAddress}-${KATANA_USDC_ADDRESS}`,
-              baseToken: {
-                address: baseToken.id,
-                name: baseToken.name,
-                symbol: baseToken.symbol,
-                decimals: baseToken.decimals,
-              },
-              quoteToken: {
-                address: quoteToken.id,
-                name: quoteToken.name,
-                symbol: quoteToken.symbol,
-              },
-              dexId: "katana-sushiswap",
-              poolId: selectedPool.id,
-              feeTier: selectedPool.feeTier,
-              url: `https://katana.roninchain.com/pool/${selectedPool.id}`,
-              chain: "katana",
+            token: {
+              address: baseToken.id,
+              name: baseToken.name,
+              symbol: baseToken.symbol,
+              decimals: baseToken.decimals,
             },
-            priceUsd: ohlcData[ohlcData.length - 1]?.close || 0,
-            currency: "USD",
-            dataSource: "subgraph",
+            pool: {
+              id: selectedPool.id,
+              address: selectedPool.id,
+              token0: selectedPool.token0,
+              token1: selectedPool.token1,
+              feeTier: selectedPool.feeTier,
+              totalValueLockedUSD: parseFloat(selectedPool.totalValueLockedUSD),
+              volumeUSD: parseFloat(selectedPool.volumeUSD),
+            },
+            isToken0,
+            quoteToken,
+            lastUpdate: now,
+            lastSwapTimestamp,
+            dataRange: {
+              start: allSwaps.length > 0 ? Math.min(...allSwaps.map(s => s.timestamp)) : now * 1000,
+              end: lastSwapTimestamp,
+            },
+            chain: "katana",
+            dexId: "katana-sushiswap",
           },
         };
 
-        console.log(`[Katana Debug] Response data prepared:`, {
-          chartLength: responseData.chart.length,
-          metadata: responseData.metadata,
-          firstPoint: responseData.chart[0],
-          lastPoint: responseData.chart[responseData.chart.length - 1],
-        });
-
-        // Cache the result
+        // Step 9: Save updated data to Redis
         try {
-          console.log(
-            `[Katana Debug] Caching data with key: ${cacheKey}, TTL: ${OHLC_CACHE_TTL}`
-          );
-          await storeValue(
-            cacheKey,
-            JSON.stringify(responseData),
-            OHLC_CACHE_TTL
-          );
-          console.log(
-            `[Katana Debug] Successfully cached OHLC data for ${normalizedAddress}`
-          );
-        } catch (cacheError) {
-          console.warn(
-            `[Katana Debug] Cache write error for ${cacheKey}:`,
-            cacheError
-          );
+          await storeValue(cacheKey, JSON.stringify(updatedStoredData), FULL_SWAP_DATA_TTL);
+          console.log(`[Katana Incremental] Successfully saved ${allSwaps.length} swaps to Redis`);
+        } catch (saveError) {
+          console.error(`[Katana Incremental] Failed to save to Redis:`, saveError);
         }
 
-        console.log(`[Katana Debug] Sending successful response`);
+        // Step 10: Filter data for response (requested time range)
+        const requestedStartTime = Math.floor(Date.now() / 1000) - (daysNum * 24 * 60 * 60);
+        const filteredSwaps = allSwaps.filter(
+          swap => swap.timestamp >= requestedStartTime * 1000
+        );
+
+        const responseData = {
+          swaps: filteredSwaps,
+          metadata: {
+            ...updatedStoredData.metadata,
+            totalSwaps: filteredSwaps.length,
+            timeRange: {
+              start: requestedStartTime * 1000,
+              end: Date.now(),
+              days: daysNum,
+            },
+          },
+        };
+
+        // Step 11: Clear update lock
+        try {
+          // Note: You might want to implement a Redis delete function
+          // For now, the lock will expire automatically
+        } catch (unlockError) {
+          console.warn(`[Katana Incremental] Failed to clear update lock:`, unlockError);
+        }
+
+        console.log(`[Katana Incremental] Sending response with ${filteredSwaps.length} swaps`);
+
         res.status(200).json({
           status: "success",
           data: responseData,
           source: "katana-sushiswap",
           cached: false,
           tokenAddress: normalizedAddress,
-          resolution,
-          count: ohlcData.length,
-          dataSource: "subgraph",
+          count: filteredSwaps.length,
           poolId: selectedPool.id,
+          poolTVL: selectedPool.totalValueLockedUSD,
           chain: "katana",
+          updateStatus: "updated",
+          stats: {
+            totalSwapsStored: allSwaps.length,
+            newSwapsFetched: processedNewSwaps.length,
+            existingSwaps: existingSwaps.length,
+          },
         });
+
       } catch (apiError: any) {
-        console.error(`[Katana Debug] API error for ${normalizedAddress}:`, {
+        console.error(`[Katana Incremental] API error:`, {
           message: apiError.message,
           status: apiError.response?.status,
-          statusText: apiError.response?.statusText,
           data: apiError.response?.data,
         });
 
-        if (apiError.response?.status === 404) {
-          res.status(404).json({
-            status: "error",
-            msg: "Pool not found or no trading data available on Katana",
-            tokenAddress: normalizedAddress,
-          });
-        } else if (apiError.response?.status === 429) {
-          res.status(429).json({
-            status: "error",
-            msg: "Rate limited by Katana subgraph. Please try again later.",
-          });
-        } else {
-          res.status(500).json({
-            status: "error",
-            msg: "Failed to fetch OHLC data from Katana",
-            debug: {
-              error: apiError.message,
-              status: apiError.response?.status,
-              data: apiError.response?.data,
-            },
-          });
-        }
+        res.status(500).json({
+          status: "error",
+          msg: "Failed to fetch or update swap data",
+          debug: {
+            error: apiError.message,
+            status: apiError.response?.status,
+          },
+        });
       }
     });
+
   } catch (error: any) {
-    console.error("[Katana Debug] OHLC controller error:", {
-      message: error.message,
-      stack: error.stack,
-      tokenAddress,
-      resolution,
-      days,
-    });
+    console.error("[Katana Incremental] Controller error:", error);
     res.status(500).json({
       status: "error",
       msg: "Unexpected server error",
@@ -805,17 +674,15 @@ export async function getKatanaOHLCData(
 }
 
 /**
- * Clear OHLC cache for a specific token
+ * Clear cache for a specific token (for debugging/admin)
  */
-export async function clearKatanaOHLCCache(
+export async function clearKatanaSwapCache(
   req: Request<{}, {}, {}, { tokenAddress?: string }>,
   res: Response,
   next: NextFunction
 ): Promise<void> {
   try {
     const { tokenAddress } = req.query;
-
-    console.log(`[Katana Debug] Clear cache request for: ${tokenAddress}`);
 
     if (!tokenAddress) {
       res.status(400).json({
@@ -826,7 +693,12 @@ export async function clearKatanaOHLCCache(
     }
 
     const normalizedAddress = tokenAddress.toLowerCase();
-    console.log(`[Katana Debug] Clearing cache for: ${normalizedAddress}`);
+    const cacheKey = `${FULL_SWAP_DATA_PREFIX}${normalizedAddress}`;
+    
+    console.log(`[Katana Incremental] Clearing cache for: ${normalizedAddress}`);
+
+    // Note: Implement Redis delete if available, or set very short TTL
+    // await deleteValue(cacheKey);
 
     res.status(200).json({
       status: "success",
@@ -835,7 +707,7 @@ export async function clearKatanaOHLCCache(
       chain: "katana",
     });
   } catch (error) {
-    console.error("[Katana Debug] Clear cache error:", error);
+    console.error("[Katana Incremental] Clear cache error:", error);
     res.status(500).json({
       status: "error",
       msg: "Unexpected server error",

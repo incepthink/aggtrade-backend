@@ -43,8 +43,8 @@ import {
 
 // Import Katana SushiSwap Pool OHLC controllers
 import {
-  getKatanaOHLCData,
-  clearKatanaOHLCCache,
+  getKatanaSwapData,
+  clearKatanaSwapCache,
 } from "./controllers/katanaSushiswapOHLCController";
 
 // Import Katana Token OHLC controllers
@@ -96,8 +96,8 @@ router.get("/ohlc/ethereum/token", getEthereumTokenOHLCData);
 router.delete("/ohlc/ethereum/token/cache", clearEthereumTokenOHLCCache);
 
 // Katana SushiSwap Pool OHLC routes (original pool-based implementation)
-router.get("/ohlc/katana/pool", getKatanaOHLCData);
-router.delete("/ohlc/katana/pool/cache", clearKatanaOHLCCache);
+router.get("/ohlc/katana/pool", getKatanaSwapData);
+router.delete("/ohlc/katana/pool/cache", clearKatanaTokenOHLCCache);
 
 // Katana Token OHLC routes (new token-based implementation)
 router.get("/ohlc/katana/token", getKatanaTokenOHLCData);
