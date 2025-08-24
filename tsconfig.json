@@ -23,5 +23,5 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   },
-  "include": ["*.ts", "controllers/controllers.ts"] 
+  "include": ["*.ts", "src/controllers/controllers.ts", "src/models.ts", "src/index.ts", "src/app.ts", "src/router.ts", "src/redis.ts", "src/mongodb.ts"] 
 }

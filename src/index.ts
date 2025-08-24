@@ -1,6 +1,6 @@
 import Moralis from "moralis";
 import { createApp } from "./app.js";
-import { connectDB } from "./database.js";
+import { connectDB } from "./mongodb.js";
 import dotenv from "dotenv";
 
 async function bootstrap() {

@@ -53,6 +53,15 @@ import {
   clearKatanaTokenOHLCCache,
 } from "./controllers/katanaTokenOHLCController";
 
+import {getKatanaSwapData as getKatanaSwapDataNew, clearKatanaSwapCache as clearKatanaSwapCacheNew} from "./controllers/swapOHLC/katanaSushiswapSwapController"
+import {getEthereumSwapData, clearEthereumSwapCache} from "./controllers/swapOHLC/ethereumSushiswapSwapController"
+
+// Import Katana SqrtPrice controller (true pool pricing)
+import {
+  getKatanaSqrtPriceData,
+  clearKatanaSqrtPriceCache,
+} from "./controllers/sqrtOHLC/katanaSushiswapSqrtPriceController";
+
 const router = Router();
 
 // POST /api/address → Create mapping if it doesn't exist
@@ -114,5 +123,17 @@ router.delete("/ohlc/ethereum/cache", clearEthereumTokenOHLCCache);
 // Default OHLC route (uses 1inch as primary fallback)
 router.get("/ohlc", getOHLCData1inch);
 router.post("/ohlc/batch", getBatchOHLCData1inch);
+
+// Katana swap OHLC routes
+router.get("/ohlc/katana/swaps", getKatanaSwapDataNew);
+router.delete("/ohlc/katana/swaps/cache", clearKatanaSwapCacheNew);
+
+// Katana SqrtPrice OHLC routes (accurate pool-based pricing using sqrtPriceX96)
+router.get("/ohlc/katana/sqrtprice", getKatanaSqrtPriceData);
+router.delete("/ohlc/katana/sqrtprice/cache", clearKatanaSqrtPriceCache);
+
+// Ethereum swap OHLC routes
+router.get("/ohlc/ethereum/swaps", getEthereumSwapData);
+router.delete("/ohlc/ethereum/swaps/cache", clearEthereumSwapCache);
 
 export default router;
