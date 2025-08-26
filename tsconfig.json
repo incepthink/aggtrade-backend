@@ -1,27 +1,27 @@
 {
   "compilerOptions": {
-    // Enable latest features
-    "lib": ["ESNext", "DOM"],
     "target": "ESNext",
+    "lib": ["ESNext", "DOM"],
     "module": "commonjs",
-    "moduleDetection": "force",
+    "moduleResolution": "node",
     "jsx": "react-jsx",
-    "allowJs": true,
-    "rootDir": ".",          
-    "outDir": "dist",     
- "esModuleInterop": true,
-    // Bundler mode
+
+    "rootDir": ".",
+    "outDir": "dist",
     "noEmit": false,
 
-    // Best practices
     "strict": true,
     "skipLibCheck": true,
     "noFallthroughCasesInSwitch": true,
 
-    // Some stricter flags (disabled by default)
-    "noUnusedLocals": false,
-    "noUnusedParameters": false,
-    "noPropertyAccessFromIndexSignature": false
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+
+    "resolveJsonModule": true
   },
-  "include": ["*.ts", "src/controllers/controllers.ts", "src/models.ts", "src/index.ts", "src/app.ts", "src/router.ts", "src/redis.ts", "src/mongodb.ts"] 
+  "include": [
+    "src/**/*.ts",
+    "*.ts",
+    "config/**/*.json"
+  ]
 }

@@ -62,6 +62,10 @@ import {
   clearKatanaSqrtPriceCache,
 } from "./controllers/sqrtOHLC/katanaSushiswapSqrtPriceController";
 
+import {
+  appendHistoricalKatanaSwapData,
+} from "./controllers/swapOHLC/appendHistoricalData";
+
 const router = Router();
 
 // POST /api/address → Create mapping if it doesn't exist
@@ -135,5 +139,8 @@ router.delete("/ohlc/katana/sqrtprice/cache", clearKatanaSqrtPriceCache);
 // Ethereum swap OHLC routes
 router.get("/ohlc/ethereum/swaps", getEthereumSwapData);
 router.delete("/ohlc/ethereum/swaps/cache", clearEthereumSwapCache);
+
+// Katana historical data routes
+router.get("/ohlc/katana/swaps/append-historical", appendHistoricalKatanaSwapData);
 
 export default router;

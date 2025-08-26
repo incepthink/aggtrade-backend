@@ -2,6 +2,7 @@ import Moralis from "moralis";
 import { createApp } from "./app.js";
 import { connectDB } from "./mongodb.js";
 import dotenv from "dotenv";
+import sequelize from "./utils/db/sequelize"
 
 async function bootstrap() {
   dotenv.config();
@@ -11,6 +12,9 @@ async function bootstrap() {
   const PORT = Number(process.env.PORT) || 5000;
 
   try {
+    await sequelize.authenticate()
+    await sequelize.sync()
+
     await connectDB(MONGO_URI);
 
     await Moralis.start({ apiKey: process.env.MORALIS_API! });
@@ -26,3 +30,4 @@ async function bootstrap() {
 }
 
 bootstrap();
+

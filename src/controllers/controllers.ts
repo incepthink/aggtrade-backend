@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
-import Mapping from "../models";
+import Mapping from "../mongoModels";
 import Moralis from "moralis";
 import { ethers } from "ethers";
 import { createProxyMiddleware } from "http-proxy-middleware";
