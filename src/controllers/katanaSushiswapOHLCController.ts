@@ -7,6 +7,8 @@ import { getValue, storeValue } from "../redis/katanaTokens";
 import KatanaSwap from "../models/KatanaSwap";
 import { Op } from "sequelize";
 
+import { getTokenUSDPrice } from "../utils/sushiPriceUtils";
+
 // Types
 interface SwapData {
   id: string;
@@ -28,6 +30,7 @@ interface SwapData {
   amount0USD: string;
   amount1USD: string;
   amountUSD: string;
+  sqrtPriceX96: string; // Added for price calculation
   pool: {
     id: string;
   };
@@ -126,12 +129,40 @@ const UPDATE_LOCK_TTL = 60 * 60; // 1 hour lock
 const KATANA_SUBGRAPH_URL = "https://api.studio.thegraph.com/query/106601/sushi-v-3-katana/version/latest";
 const FULL_DATA_DAYS = 365;
 const UPDATE_INTERVAL_HOURS = 1;
-const MAX_SKIP_LIMIT = 5000; // Maximum skip value allowed
-const MAX_TOTAL_SWAPS = 6000; // Maximum total swaps across all batches
+const MAX_SKIP_LIMIT = 2000; // Maximum skip value allowed
+const MAX_TOTAL_SWAPS = 3000; // Maximum total swaps across all batches
 
 // Priority tokens for pool selection
 const USDC_KATANA = "0x203A662b0BD271A6ed5a60EdFbd04bFce608FD36".toLowerCase();
 const AUSD_KATANA = "0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a".toLowerCase();
+
+/**
+ * Convert sqrtPriceX96 to token prices
+ */
+function sqrtPriceX96ToTokenPrices(
+  sqrtPriceX96: string,
+  token0Decimals: number,
+  token1Decimals: number
+): { token0Price: number; token1Price: number } {
+  try {
+    const Q192 = BigInt(2) ** BigInt(192);
+    const sqrtPrice = BigInt(sqrtPriceX96);
+    const price = sqrtPrice * sqrtPrice;
+    
+    const token0DecimalsBN = BigInt(10) ** BigInt(token0Decimals);
+    const token1DecimalsBN = BigInt(10) ** BigInt(token1Decimals);
+    
+    // Convert to regular numbers for calculation
+    const priceNumber = Number(price) / Number(Q192);
+    const token0Price = priceNumber * Number(token0DecimalsBN) / Number(token1DecimalsBN);
+    const token1Price = 1 / token0Price;
+    
+    return { token0Price, token1Price };
+  } catch (error) {
+    console.error("Error calculating price from sqrtPriceX96:", error);
+    return { token0Price: 0, token1Price: 0 };
+  }
+}
 
 /**
  * Load historical swaps from MySQL table
@@ -250,7 +281,7 @@ function getPoolsByTVLQuery(): string {
 
 /**
  * Get GraphQL query for swap data from a specific pool with time filtering
- * Modified to fetch in descending order (latest swaps first)
+ * Modified to include sqrtPriceX96 for price calculation
  */
 function getSwapsQuery(): string {
   return `
@@ -285,6 +316,7 @@ function getSwapsQuery(): string {
         amount0USD
         amount1USD
         amountUSD
+        sqrtPriceX96
         pool {
           id
         }
@@ -467,20 +499,66 @@ async function fetchSwaps(
 }
 
 /**
- * Process raw swaps into our format
+ * Process raw swaps into our format with correct price calculation from sqrtPriceX96
  */
-function processSwaps(rawSwaps: SwapData[], tokenAddress: string, isToken0: boolean): ProcessedSwap[] {
-  return rawSwaps.map(swap => ({
-    id: swap.id,
-    timestamp: parseInt(swap.timestamp) * 1000, // Convert to milliseconds
-    tokenPriceUSD: isToken0 
-      ? parseFloat(swap.token0PriceUSD || "0")
-      : parseFloat(swap.token1PriceUSD || "0"),
-    tokenVolumeUSD: isToken0
-      ? Math.abs(parseFloat(swap.amount0USD || "0")) // Take absolute value
-      : Math.abs(parseFloat(swap.amount1USD || "0")), // Take absolute value
-    totalVolumeUSD: parseFloat(swap.amountUSD || "0"),
-  }));
+async function processSwaps(rawSwaps: SwapData[], tokenAddress: string, isToken0: boolean): Promise<ProcessedSwap[]> {
+  const results: ProcessedSwap[] = [];
+  
+  for (const swap of rawSwaps) {
+    // Calculate correct price from sqrtPriceX96
+    const prices = sqrtPriceX96ToTokenPrices(
+      swap.sqrtPriceX96,
+      parseInt(swap.token0.decimals),
+      parseInt(swap.token1.decimals)
+    );
+    
+    let correctTokenPrice: number;
+    
+    // For USDC pairs, use direct USD pricing (USDC = $1)
+    if (swap.token1.id.toLowerCase() === USDC_KATANA) {
+      // USDC is token1, so token0Price gives price in USDC terms (= USD)
+      correctTokenPrice = isToken0 ? prices.token0Price : 1.0;
+    } else if (swap.token0.id.toLowerCase() === USDC_KATANA) {
+      // USDC is token0, so token1Price gives price in USDC terms (= USD)
+      correctTokenPrice = isToken0 ? 1.0 : prices.token1Price;
+    } else if (swap.token1.id.toLowerCase() === AUSD_KATANA) {
+      // AUSD is token1, so token0Price gives price in AUSD terms (= USD)
+      correctTokenPrice = isToken0 ? prices.token0Price : 1.0;
+    } else if (swap.token0.id.toLowerCase() === AUSD_KATANA) {
+      // AUSD is token0, so token1Price gives price in AUSD terms (= USD)
+      correctTokenPrice = isToken0 ? 1.0 : prices.token1Price;
+    } else {
+      // For non-stable pairs, get counter token USD price and calculate
+      const counterToken = isToken0 ? swap.token1 : swap.token0;
+      const counterTokenPrice = await getTokenUSDPrice(
+        counterToken.id,
+        counterToken.symbol,
+        747474 // Katana chain ID
+      );
+      
+      if (counterTokenPrice > 0) {
+        // Calculate target token price using counter token USD price
+        const tokenPriceInCounterToken = isToken0 ? prices.token0Price : prices.token1Price;
+        correctTokenPrice = tokenPriceInCounterToken * counterTokenPrice;
+      } else {
+        // Fallback to original calculation if counter token price unavailable
+        correctTokenPrice = isToken0 ? prices.token0Price : prices.token1Price;
+        console.warn(`Could not get USD price for counter token ${counterToken.symbol}, using fallback calculation`);
+      }
+    }
+    
+    results.push({
+      id: swap.id,
+      timestamp: parseInt(swap.timestamp) * 1000, // Convert to milliseconds
+      tokenPriceUSD: correctTokenPrice, // Use calculated price instead of indexer price
+      tokenVolumeUSD: isToken0
+        ? Math.abs(parseFloat(swap.amount0USD || "0")) // Take absolute value
+        : Math.abs(parseFloat(swap.amount1USD || "0")), // Take absolute value
+      totalVolumeUSD: parseFloat(swap.amountUSD || "0"),
+    });
+  }
+  
+  return results;
 }
 
 /**
@@ -611,7 +689,7 @@ export async function getKatanaSwapData(
           
           // Merge Redis and MySQL data
           const combinedSwaps = mergeWithHistoricalSwaps(filteredRedisSwaps, historicalSwaps);
-
+          
           const responseData = {
             swaps: combinedSwaps,
             metadata: {
@@ -782,6 +860,7 @@ export async function getKatanaSwapData(
           console.log(`[Katana Incremental] Incremental fetch from ${startTime} to ${endTime}`);
           newSwaps = await fetchSwaps(selectedPool.id, startTime, endTime);
           console.log(`[Katana Incremental] Fetched ${newSwaps.length} new swaps`);
+          
         } else {
           // Full fetch: get all data for 365 days
           const { startTime, endTime } = getFullTimeRange();
@@ -793,7 +872,7 @@ export async function getKatanaSwapData(
         }
 
         // Step 7: Process and merge data
-        const processedNewSwaps = processSwaps(newSwaps, normalizedAddress, isToken0);
+        const processedNewSwaps = await processSwaps(newSwaps, normalizedAddress, isToken0);
         const existingSwaps = storedData?.swaps || [];
         const allSwaps = mergeSwaps(existingSwaps, processedNewSwaps);
 

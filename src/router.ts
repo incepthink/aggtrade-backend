@@ -65,6 +65,7 @@ import {
 import {
   appendHistoricalKatanaSwapData,
 } from "./controllers/swapOHLC/appendHistoricalData";
+import { getKatanaTokens, getKatanaTokensStats, getTokensFromDatabase, updateToken } from "./controllers/katanaTokensController";
 
 const router = Router();
 
@@ -142,5 +143,10 @@ router.delete("/ohlc/ethereum/swaps/cache", clearEthereumSwapCache);
 
 // Katana historical data routes
 router.get("/ohlc/katana/swaps/append-historical", appendHistoricalKatanaSwapData);
+
+router.get('/katana/tokens', getKatanaTokens);                    // Fetch from subgraph + save to DB
+router.get('/katana/tokens/db', getTokensFromDatabase);           // Get tokens from database
+router.get('/katana/tokens/stats', getKatanaTokensStats);         // Get statistics
+router.put('/katana/tokens/status', updateToken); 
 
 export default router;
