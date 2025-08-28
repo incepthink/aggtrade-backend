@@ -54,7 +54,7 @@ import {
 } from "./controllers/katanaTokenOHLCController";
 
 import {getKatanaSwapData as getKatanaSwapDataNew, clearKatanaSwapCache as clearKatanaSwapCacheNew} from "./controllers/swapOHLC/katanaSushiswapSwapController"
-import {getEthereumSwapData, clearEthereumSwapCache} from "./controllers/swapOHLC/ethereumSushiswapSwapController"
+// import {getEthereumSwapData, clearEthereumSwapCache} from "./controllers/swapOHLC/ethereumSushiswapSwapController"
 
 // Import Katana SqrtPrice controller (true pool pricing)
 import {
@@ -66,6 +66,8 @@ import {
   appendHistoricalKatanaSwapData,
 } from "./controllers/swapOHLC/appendHistoricalData";
 import { getKatanaTokens, getKatanaTokensStats, getTokensFromDatabase, updateToken } from "./controllers/katanaTokensController";
+
+import {getEthereumSwapData, clearEthereumSwapCache} from "./controllers/ethereumSushiswapOHLCController"
 
 const router = Router();
 
@@ -112,6 +114,10 @@ router.delete("/ohlc/ethereum/token/cache", clearEthereumTokenOHLCCache);
 // Katana SushiSwap Pool OHLC routes (original pool-based implementation)
 router.get("/ohlc/katana/pool", getKatanaSwapData);
 router.delete("/ohlc/katana/pool/cache", clearKatanaTokenOHLCCache);
+
+// ethereum SushiSwap Pool OHLC routes (original pool-based implementation)
+router.get("/ohlc/ethereum/pool", getEthereumSwapData);
+router.delete("/ohlc/ethereum/pool/cache", clearEthereumSwapCache);
 
 // Katana Token OHLC routes (new token-based implementation)
 router.get("/ohlc/katana/token", getKatanaTokenOHLCData);
