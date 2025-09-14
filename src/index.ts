@@ -13,7 +13,7 @@ async function bootstrap() {
 
   try {
     await sequelize.authenticate()
-    await sequelize.sync()
+    await sequelize.sync({alter: true})
 
     await connectDB(MONGO_URI);
 

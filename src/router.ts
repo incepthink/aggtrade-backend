@@ -68,6 +68,7 @@ import {
 import { getKatanaTokens, getKatanaTokensStats, getTokensFromDatabase, updateToken } from "./controllers/katanaTokensController";
 
 import {getEthereumSwapData, clearEthereumSwapCache} from "./controllers/ethereumSushiswapOHLCController"
+import { getEthereumTokens, getEthereumTokensFromDatabase, getEthereumTokensStats, updateEthereumToken } from "./controllers/ethereumTokensController";
 
 const router = Router();
 
@@ -154,5 +155,10 @@ router.get('/katana/tokens', getKatanaTokens);                    // Fetch from 
 router.get('/katana/tokens/db', getTokensFromDatabase);           // Get tokens from database
 router.get('/katana/tokens/stats', getKatanaTokensStats);         // Get statistics
 router.put('/katana/tokens/status', updateToken); 
+
+router.get('/ethereum/tokens', getEthereumTokens);                    // Fetch from subgraph + save to DB
+router.get('/ethereum/tokens/db', getEthereumTokensFromDatabase);           // Get tokens from database
+router.get('/ethereum/tokens/stats', getEthereumTokensStats);         // Get statistics
+router.put('/ethereum/tokens/status', updateEthereumToken); 
 
 export default router;

@@ -144,7 +144,7 @@ Token.init(
       }
     },
     symbol: {
-      type: DataTypes.STRING(20),
+      type: DataTypes.STRING(30),
       allowNull: false
     },
     name: {
