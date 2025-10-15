@@ -134,6 +134,8 @@ export const getEquityTrendForUser = async (
       });
     }
 
+    await updateBalanceHistory(userAddress);
+
     // Step 2: Get balance history for the user
     const balanceHistory = await BalanceHistory.getUserHistory(
       user.id,
