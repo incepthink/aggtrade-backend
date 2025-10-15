@@ -11,13 +11,14 @@ async function updateUserBalance(userId: number, walletAddress: string) {
     console.log(`[Balance Update] Processing user: ${walletAddress}`);
 
     // Fetch ETH balance and Yearn vaults balance in parallel
-    const [etherBalUSD, yearnfiBalUSD] = await Promise.all([
+    const [etherBalUSD, yearnfiBalUSD, erc20BalanceUSD] = await Promise.all([
       getEtherBalanceUSD(walletAddress),
       calculateCumulatedValue(walletAddress),
+      getErc20BalanceUSD(walletAddress)
     ]);
 
     // Calculate total balance
-    const totalBalanceUSD = etherBalUSD + yearnfiBalUSD;
+    const totalBalanceUSD = etherBalUSD + yearnfiBalUSD + erc20BalanceUSD;
 
     // Store balance in history
     await BalanceHistory.recordBalance(userId, totalBalanceUSD.toString());
@@ -96,21 +97,17 @@ async function runEquityTrendUpdate() {
 
 // Schedule cron job to run every 4 hours
 // Pattern: "0 */4 * * *" = At minute 0 past every 4th hour
-// cron.schedule("0 */4 * * *", async () => {
-//   await runEquityTrendUpdate();
-// });
+cron.schedule("0 */4 * * *", async () => {
+  await runEquityTrendUpdate();
+});
 
 // Run immediately on startup (optional - remove if you don't want this)
-(async () => {
-  // console.log("[Cron Job] Starting equity trend tracker...");
-  // console.log("[Cron Job] Scheduled to run every 4 hours");
-  // console.log("[Cron Job] Running initial update now...\n");
+// (async () => {
+//   console.log("[Cron Job] Starting equity trend tracker...");
+//   console.log("[Cron Job] Scheduled to run every 4 hours");
+//   console.log("[Cron Job] Running initial update now...\n");
   
-  // await runEquityTrendUpdate();
-
-  const erc20BalanceUSD = await getErc20BalanceUSD("0x314Ab1044316e62dCDdbC87c2df57F1254b4B4A6")
-  console.log(erc20BalanceUSD);
-  
-})();
+//   await runEquityTrendUpdate();
+// })();
 
 console.log("[Cron Job] Equity trend tracker is running...");
