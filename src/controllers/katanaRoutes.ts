@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { ethers } from "ethers";
+import User from "../models/User";
 
 const provider = new ethers.JsonRpcProvider("https://rpc.katana.network");
 
@@ -14,6 +15,101 @@ const tokens = [
     decimals: 6,
     symbol: "USDC",
   },
+  {
+    address: "0x00000000efe302beaa2b3e6e1b18d08d69a9012a",
+    decimals: 6,
+    symbol: "AUSD",
+  },
+  {
+    address: "0xb0f70c0bd6fd87dbeb7c10dc692a2a6106817072",
+    decimals: 8,
+    symbol: "BTCK",
+  },
+  {
+    address: "0x876aac7648d79f87245e73316eb2d100e75f3df1",
+    decimals: 18,
+    symbol: "bvUSD",
+  },
+  {
+    address: "0xee7d8bcfb72bc1880d0cf19822eb0a2e6577ab62",
+    decimals: 18,
+    symbol: "WETH",
+  },
+  {
+    address: "0x6c16e26013f2431e8b2e1ba7067ecccad0db6c52",
+    decimals: 18,
+    symbol: "JitoSOL",
+  },
+  {
+    address: "0xfba805659e5050544e185cccdf592fd77f8c7210",
+    decimals: 18,
+    symbol: "KITSU",
+  },
+  {
+    address: "0xecac9c5f704e954931349da37f60e39f515c11c1",
+    decimals: 8,
+    symbol: "LBTC",
+  },
+  {
+    address: "0xaefec36b1c6e8a03fb6563cec97cfea7a80d3ea0",
+    decimals: 18,
+    symbol: "LKAT",
+  },
+  {
+    address: "0x1e5efca3d0db2c6d5c67a4491845c43253eb9e4e",
+    decimals: 18,
+    symbol: "MORPHO",
+  },
+  {
+    address: "0xb24e3035d1fcbc0e43cf3143c3fd92e53df2009b",
+    decimals: 18,
+    symbol: "POL",
+  },
+  {
+    address: "0xb244add9fe6cb17558221e4dfea960e680ccd29b",
+    decimals: 18,
+    symbol: "PROVE",
+  },
+  {
+    address: "0x17bff452dae47e07cea877ff0e1aba17eb62b0ab",
+    decimals: 18,
+    symbol: "SUSHI",
+  },
+  {
+    address: "0xa6c996a8d401271e8c4f95927443538d4a1f3fa2",
+    decimals: 18,
+    symbol: "unKat",
+  },
+  {
+    address: "0x2dca96907fde857dd3d816880a0df407eeb2d2f2",
+    decimals: 6,
+    symbol: "USDT",
+  },
+  {
+    address: "0x9b8df6e244526ab5f6e6400d331db28c8fdddb55",
+    decimals: 18,
+    symbol: "uSOL",
+  },
+  {
+    address: "0x0913da6da4b42f538b445599b46bb4622342cf52",
+    decimals: 8,
+    symbol: "WBTC",
+  },
+  {
+    address: "0x9893989433e7a383cb313953e4c2365107dc19a7",
+    decimals: 18,
+    symbol: "weETH",
+  },
+  {
+    address: "0x476eacd417cd65421bd34fca054377658bb5e02b",
+    decimals: 18,
+    symbol: "YFI",
+  },
+  {
+    address: "0x4772d2e014f9fc3a820c444e3313968e9a5c8121",
+    decimals: 18,
+    symbol: "yUSD",
+  },
 ];
 
 const abi = [
@@ -24,20 +120,65 @@ const abi = [
 
 async function getBalances(userAddress: string) {
   const results: any = [];
-  for (const token of tokens) {
+  
+  // Use Promise.all to fetch all balances in parallel instead of sequentially
+  const balancePromises = tokens.map(async (token) => {
     const contract = new ethers.Contract(token.address, abi, provider);
     const balance = await contract.balanceOf(userAddress);
-    // Optionally fetch decimals dynamically:
-    // const decimals = await contract.decimals();
-    results.push({
+    return {
       symbol: token.symbol,
       balance: ethers.formatUnits(balance, token.decimals),
-    });
-  }
-  return results;
+      tokenAddress: token.address,
+    };
+  });
+  
+  const allBalances = await Promise.all(balancePromises);
+  return allBalances;
 }
 
-export async function getKatanaBalance(
+
+// New function that returns only non-zero balances
+export async function getKatanaBalance(walletAddress: string) {
+  const ethBalance = await provider.getBalance(walletAddress);
+  const balanceArr = await getBalances(walletAddress);
+
+  // Add ETH balance (native token, no token address)
+  balanceArr.push({
+    symbol: "ETH",
+    balance: ethers.formatEther(ethBalance),
+    tokenAddress: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", // Native token has no contract address
+  });
+
+  // Filter only balances greater than 0
+  const nonZeroBalances = balanceArr.filter(
+    (item) => parseFloat(item.balance) > 0
+  );
+
+  return nonZeroBalances;
+}
+
+// token addresses store
+export const updateTokenAddressesForUser = async (
+  address: string, 
+  balanceData: Array<{ tokenAddress: string }>
+) => {
+  // Extract token addresses in single pass
+  const tokenAddresses: string[] = [];
+  for (let i = 0; i < balanceData.length; i++) {
+    tokenAddresses.push(balanceData[i].tokenAddress);
+  }
+
+  // Run database operations in parallel
+  const [{ user, created }] = await Promise.all([
+    User.findOrCreateUser(address, 747474),
+    User.updateTokenAddresses(address, tokenAddresses, 747474)
+  ]);
+
+  return { user, created, tokenCount: tokenAddresses.length };
+};
+
+// Renamed route handler
+export async function getKatanaBalanceRoute(
   req: Request,
   res: Response,
   _next: NextFunction
@@ -45,27 +186,39 @@ export async function getKatanaBalance(
   try {
     const { address } = req.query;
 
-    if (!address) {
-      res.status(400).json({ status: "error", message: "provide address" });
+    if (!address || typeof address !== 'string') {
+      return res.status(400).json({ status: "error", message: "provide valid address" });
     }
 
-    const ethBalance = await provider.getBalance(address as string);
-    const balanceArr = await getBalances(address as string);
+    // Validate address format
+    if (!ethers.isAddress(address)) {
+      return res.status(400).json({ status: "error", message: "invalid wallet address" });
+    }
 
-    balanceArr.push({
-      symbol: "ETH",
-      balance: ethers.formatEther(ethBalance), // Convert BigInt to string
+    // Get balance data
+    const data = await getKatanaBalance(address);
+
+    // Update user token addresses
+    const { user, created, tokenCount } = await updateTokenAddressesForUser(address, data);
+
+    return res.status(200).json({ 
+      data,
+      user: {
+        wallet_address: user.wallet_address,
+        created: created,
+        token_count: tokenCount
+      }
     });
-
-    res.status(200).json({ data: balanceArr });
   } catch (error) {
-    console.error("getKatanaBalance", error);
-    res.status(500).json({
+    console.error("getKatanaBalanceRoute", error);
+    return res.status(500).json({
       status: "error",
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }
 }
+
+
 
 // SushiswapV2 Factory and ABI
 const FACTORY_ADDRESS = "0x203e8740894c8955cB8950759876d7E7E45E04c1";

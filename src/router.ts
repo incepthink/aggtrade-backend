@@ -14,7 +14,7 @@ import {
   SwapHistoryByAddress,
 } from "./controllers/1inch";
 
-import { getKatanaBalance, getKatanaPrice } from "./controllers/katanaRoutes";
+import {  getKatanaBalanceRoute, getKatanaPrice } from "./controllers/katanaRoutes";
 
 import {
   getEthereumPrice,
@@ -69,6 +69,7 @@ import { getKatanaTokens, getKatanaTokensStats, getTokensFromDatabase, updateTok
 
 import {getEthereumSwapData, clearEthereumSwapCache} from "./controllers/ethereumSushiswapOHLCController"
 import { getEthereumTokens, getEthereumTokensFromDatabase, getEthereumTokensStats, updateEthereumToken } from "./controllers/ethereumTokensController";
+import { getEquityTrendForUser, storeUserForEquityTracking } from "./controllers/user/equityTrend";
 
 const router = Router();
 
@@ -93,7 +94,7 @@ router.get("/proxy/1inch/profile/equity-trend", portfolioHistoryController);
 
 router.get("/proxy/1inch/profile/swap-history", SwapHistoryByAddress);
 
-router.get("/balance/katana", getKatanaBalance);
+router.get("/balance/katana", getKatanaBalanceRoute);
 router.get("/price/katana", getKatanaPrice);
 
 router.get("/price/ethereum", getSushiPriceWithFallback);
@@ -160,5 +161,8 @@ router.get('/ethereum/tokens', getEthereumTokens);                    // Fetch f
 router.get('/ethereum/tokens/db', getEthereumTokensFromDatabase);           // Get tokens from database
 router.get('/ethereum/tokens/stats', getEthereumTokensStats);         // Get statistics
 router.put('/ethereum/tokens/status', updateEthereumToken); 
+
+router.post("/user/store", storeUserForEquityTracking)
+router.get("/user/equity-trend/:userAddress", getEquityTrendForUser)
 
 export default router;
