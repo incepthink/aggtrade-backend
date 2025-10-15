@@ -118,7 +118,8 @@ export const getEquityTrendForUser = async (
 
     // Step 1: Find user in database
     const user = await User.findByWallet(userAddress, chainId);
-
+    console.log("token-address", user?.token_addresses);
+    
     if (user?.token_addresses === null) {
       const data = await getKatanaBalance(userAddress);
     
