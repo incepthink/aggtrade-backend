@@ -1,3 +1,4 @@
+import 'newrelic';
 import Moralis from "moralis";
 import { createApp } from "./app.js";
 import { connectDB } from "./mongodb.js";
