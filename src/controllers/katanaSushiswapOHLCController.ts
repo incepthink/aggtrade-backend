@@ -443,7 +443,8 @@ async function fetchSwaps(
     };
 
     console.log(`[Katana Incremental] Batch: skip=${skip}, requesting=${variables.first}, remaining capacity=${remainingSkipCapacity}`);
-
+    console.log(KATANA_SUBGRAPH_URL);
+    
     try {
       const response = await axios.post<SushiGraphResponse>(
         KATANA_SUBGRAPH_URL,
