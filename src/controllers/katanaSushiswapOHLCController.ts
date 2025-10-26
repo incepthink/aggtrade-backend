@@ -126,7 +126,7 @@ const UPDATE_LOCK_PREFIX = "update_lock_katana_";
 const UPDATE_LOCK_TTL = 60 * 60; // 1 hour lock
 
 // Constants with new limits
-const KATANA_SUBGRAPH_URL = "https://api.studio.thegraph.com/query/106601/sushi-v-3-katana/version/latest";
+const KATANA_SUBGRAPH_URL = "https://api.studio.thegraph.com/query/106601/sushi-v-3-katana-2/version/latest";
 const FULL_DATA_DAYS = 365;
 const UPDATE_INTERVAL_HOURS = 1;
 const MAX_SKIP_LIMIT = 2000; // Maximum skip value allowed
