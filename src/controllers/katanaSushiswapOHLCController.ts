@@ -191,8 +191,8 @@ async function loadHistoricalSwapsFromMySQL(
         }
       },
       order: [['timestamp', 'DESC']],
-      raw: true,
-      limit: 50000 // Reasonable limit to prevent memory issues
+      raw: true
+      // No limit - load all historical data for requested timeframe
     });
 
     console.log(`[MySQL Historical] Found ${historicalSwaps.length} historical swaps`);
