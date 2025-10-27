@@ -21,6 +21,7 @@ interface SwapData {
   amount0USD: string;
   amount1USD: string;
   amountUSD: string;
+  sqrtPriceX96: string; // Added for price calculation
   pool: { id: string };
 }
 
@@ -88,9 +89,41 @@ const FULL_SWAP_DATA_PREFIX = "full_swaps_katana_";
 // In-memory lock to prevent concurrent updates for same token
 const updateLocks = new Map<string, number>();
 
+// Stablecoin addresses on Katana
+const USDC_KATANA = "0x203A662b0BD271A6ed5a60EdFbd04bFce608FD36".toLowerCase();
+const AUSD_KATANA = "0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a".toLowerCase();
+
 /* ===========================
  * Helpers
  * =========================== */
+
+/**
+ * Convert sqrtPriceX96 to token prices
+ */
+function sqrtPriceX96ToTokenPrices(
+  sqrtPriceX96: string,
+  token0Decimals: number,
+  token1Decimals: number
+): { token0Price: number; token1Price: number } {
+  try {
+    const Q192 = BigInt(2) ** BigInt(192);
+    const sqrtPrice = BigInt(sqrtPriceX96);
+    const price = sqrtPrice * sqrtPrice;
+    
+    const token0DecimalsBN = BigInt(10) ** BigInt(token0Decimals);
+    const token1DecimalsBN = BigInt(10) ** BigInt(token1Decimals);
+    
+    // Convert to regular numbers for calculation
+    const priceNumber = Number(price) / Number(Q192);
+    const token0Price = priceNumber * Number(token0DecimalsBN) / Number(token1DecimalsBN);
+    const token1Price = 1 / token0Price;
+    
+    return { token0Price, token1Price };
+  } catch (error) {
+    console.error("Error calculating price from sqrtPriceX96:", error);
+    return { token0Price: 0, token1Price: 0 };
+  }
+}
 
 function getHistoricalSwapsQuery() {
   return `
@@ -111,6 +144,7 @@ function getHistoricalSwapsQuery() {
         amount0USD
         amount1USD
         amountUSD
+        sqrtPriceX96
         pool { id }
       }
     }
@@ -118,17 +152,47 @@ function getHistoricalSwapsQuery() {
 }
 
 function processSwaps(rawSwaps: SwapData[], isToken0: boolean): ProcessedSwap[] {
-  return rawSwaps.map((swap) => ({
-    id: swap.id,
-    timestamp: parseInt(swap.timestamp, 10) * 1000, // sec -> ms
-    tokenPriceUSD: isToken0
-      ? parseFloat(swap.token0PriceUSD || "0")
-      : parseFloat(swap.token1PriceUSD || "0"),
-    tokenVolumeUSD: isToken0
-      ? Math.abs(parseFloat(swap.amount0USD || "0"))
-      : Math.abs(parseFloat(swap.amount1USD || "0")),
-    totalVolumeUSD: parseFloat(swap.amountUSD || "0"),
-  }));
+  return rawSwaps.map((swap) => {
+    // Calculate correct price from sqrtPriceX96
+    const prices = sqrtPriceX96ToTokenPrices(
+      swap.sqrtPriceX96,
+      parseInt(swap.token0.decimals),
+      parseInt(swap.token1.decimals)
+    );
+    
+    let correctTokenPrice: number;
+    
+    // For USDC pairs, use direct USD pricing (USDC = $1)
+    if (swap.token1.id.toLowerCase() === USDC_KATANA) {
+      // USDC is token1, so token0Price gives price in USDC terms (= USD)
+      correctTokenPrice = isToken0 ? prices.token0Price : 1.0;
+    } else if (swap.token0.id.toLowerCase() === USDC_KATANA) {
+      // USDC is token0, so token1Price gives price in USDC terms (= USD)
+      correctTokenPrice = isToken0 ? 1.0 : prices.token1Price;
+    } else if (swap.token1.id.toLowerCase() === AUSD_KATANA) {
+      // AUSD is token1, so token0Price gives price in AUSD terms (= USD)
+      correctTokenPrice = isToken0 ? prices.token0Price : 1.0;
+    } else if (swap.token0.id.toLowerCase() === AUSD_KATANA) {
+      // AUSD is token0, so token1Price gives price in AUSD terms (= USD)
+      correctTokenPrice = isToken0 ? 1.0 : prices.token1Price;
+    } else {
+      // For non-stable pairs, fallback to token price from sqrtPriceX96
+      // Note: This won't have USD conversion for non-stable pairs
+      // You may want to add getTokenUSDPrice logic here if needed
+      correctTokenPrice = isToken0 ? prices.token0Price : prices.token1Price;
+      console.warn(`Non-stablecoin pair detected, using fallback price calculation`);
+    }
+    
+    return {
+      id: swap.id,
+      timestamp: parseInt(swap.timestamp, 10) * 1000, // sec -> ms
+      tokenPriceUSD: correctTokenPrice,
+      tokenVolumeUSD: isToken0
+        ? Math.abs(parseFloat(swap.amount0USD || "0"))
+        : Math.abs(parseFloat(swap.amount1USD || "0")),
+      totalVolumeUSD: parseFloat(swap.amountUSD || "0"),
+    };
+  });
 }
 
 function convertToModelFormat(
