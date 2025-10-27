@@ -71,7 +71,31 @@ import {getEthereumSwapData, clearEthereumSwapCache} from "./controllers/ethereu
 import { getEthereumTokens, getEthereumTokensFromDatabase, getEthereumTokensStats, updateEthereumToken } from "./controllers/ethereumTokensController";
 import { getEquityTrendForUser, storeUserForEquityTracking } from "./controllers/user/equityTrend";
 
+import { triggerMigrationManually } from "./cron-jobs/migrateKatanaSwapsToMySQL";
+import { fixTokenGaps } from "./controllers/katanaGapFixRoutes";
+
 const router = Router();
+
+// ADmin route to run migration job manually
+router.get("/admin/trigger-migration", async (req, res) => {
+  try {
+    console.log('Manual migration triggered via API');
+    triggerMigrationManually().catch(err => {
+      console.error('Migration error:', err);
+    });
+    res.json({
+      status: 'success',
+      message: 'Migration job triggered'
+    });
+  } catch (error) {
+    console.error("Error triggering migration job:", error);
+    res.status(500).json({ error: "Failed to trigger migration job" });
+  }  
+}
+)
+
+// Admin route to fill gaps in katana swap data
+router.get("/admin/fill-katana-gaps/:tokenAddress", fixTokenGaps)
 
 // POST /api/address → Create mapping if it doesn't exist
 router.post("/address", createMapping);
