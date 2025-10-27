@@ -76,7 +76,7 @@ const sushiLimiter = new Bottleneck({
 });
 
 const KATANA_SUBGRAPH_URL =
-  "https://api.studio.thegraph.com/query/106601/sushi-v-3-katana/version/latest";
+  "https://api.studio.thegraph.com/query/106601/sushi-v-3-katana-2/version/latest";
 
 const MAX_SKIP_LIMIT = 5000;
 const MAX_TOTAL_SWAPS = 6000;
