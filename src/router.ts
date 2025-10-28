@@ -63,7 +63,7 @@ import {
 } from "./controllers/sqrtOHLC/katanaSushiswapSqrtPriceController";
 
 import {
-  appendHistoricalKatanaSwapData,
+  appendHistoricalData,
 } from "./controllers/swapOHLC/appendHistoricalData";
 import { getKatanaTokens, getKatanaTokensStats, getTokensFromDatabase, updateToken } from "./controllers/katanaTokensController";
 
@@ -178,7 +178,7 @@ router.get("/ohlc/ethereum/swaps", getEthereumSwapData);
 router.delete("/ohlc/ethereum/swaps/cache", clearEthereumSwapCache);
 
 // Katana historical data routes
-router.get("/ohlc/katana/swaps/append-historical", appendHistoricalKatanaSwapData);
+router.get("/ohlc/katana/swaps/append-historical", appendHistoricalData);
 
 router.get('/katana/tokens', getKatanaTokens);                    // Fetch from subgraph + save to DB
 router.get('/katana/tokens/db', getTokensFromDatabase);           // Get tokens from database
