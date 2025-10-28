@@ -1,677 +1,279 @@
-// src/controllers/appendHistoricalData.ts
+// src/controllers/katana/appendHistoricalController.ts
 import type { Request, Response, NextFunction } from "express";
-import axios from "axios";
-import Bottleneck from "bottleneck";
-import KatanaSwap from "../../models/KatanaSwap";
-import type { Transaction } from "sequelize";
-import sequelize from "../../utils/db/sequelize";
-import { getValue } from "../../redis/katanaTokens";
-
-/* ===========================
- * Types
- * =========================== */
-
-interface SwapData {
-  id: string;
-  timestamp: string;
-  token0: { id: string; symbol: string; name: string; decimals: string };
-  token1: { id: string; symbol: string; name: string; decimals: string };
-  token0PriceUSD: string;
-  token1PriceUSD: string;
-  amount0USD: string;
-  amount1USD: string;
-  amountUSD: string;
-  sqrtPriceX96: string; // Added for price calculation
-  pool: { id: string };
-}
-
-interface ProcessedSwap {
-  id: string;
-  timestamp: number; // ms
-  tokenPriceUSD: number;
-  tokenVolumeUSD: number;
-  totalVolumeUSD: number;
-}
-
-interface SushiGraphResponse {
-  data: { swaps?: SwapData[] };
-  errors?: any[];
-}
-
-interface ExistingSwapInfo {
-  pool_id: string;
-  pool_token0_address: string;
-  pool_token0_symbol: string;
-  pool_token1_address: string;
-  pool_token1_symbol: string;
-  pool_fee_tier: number;
-  is_token0: boolean;
-}
-
-interface RedisSwapData {
-  swaps: ProcessedSwap[];
-  metadata: {
-    pool: {
-      id: string;
-      token0: any;
-      token1: any;
-      feeTier: string;
-      totalValueLockedUSD: number;
-      volumeUSD: number;
-    };
-    isToken0: boolean;
-    lastSwapTimestamp: number;
-  };
-}
-
-/* ===========================
- * Config / Constants
- * =========================== */
-
-const sushiLimiter = new Bottleneck({
-  reservoir: 60,
-  reservoirRefreshAmount: 60,
-  reservoirRefreshInterval: 60 * 1000, // per minute
-  maxConcurrent: 2,
-  minTime: 1000,
-});
-
-const KATANA_SUBGRAPH_URL =
-  "https://api.studio.thegraph.com/query/106601/sushi-v-3-katana-2/version/latest";
-
-const MAX_SKIP_LIMIT = 5000;
-const MAX_TOTAL_SWAPS = 6000;
-const UPDATE_LOCK_TIMEOUT = 60 * 60 * 1000; // 1 hour (ms)
-
-// Redis cache configuration
-const FULL_SWAP_DATA_PREFIX = "full_swaps_katana_";
-
-// In-memory lock to prevent concurrent updates for same token
-const updateLocks = new Map<string, number>();
-
-// Stablecoin addresses on Katana
-const USDC_KATANA = "0x203A662b0BD271A6ed5a60EdFbd04bFce608FD36".toLowerCase();
-const AUSD_KATANA = "0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a".toLowerCase();
-
-/* ===========================
- * Helpers
- * =========================== */
+import {
+  // Constants
+  MAX_SKIP_LIMIT,
+  MAX_TOTAL_SWAPS,
+  
+  // Types
+  ExistingSwapInfo,
+  ProcessedSwap,
+  RedisSwapData,
+  
+  // Utilities
+  fetchHistoricalSwaps,
+  processSwaps,
+  convertToModelFormat,
+  bulkInsertSwaps,
+  loadRedisSwapData,
+  getSwapCount,
+  getOldestSwapTimestamp,
+  getExistingSwapInfo,
+  getMySQLSwapStats, // This is the renamed import
+  checkInMemoryLock,
+  setInMemoryLock,
+  clearInMemoryLock,
+} from '../../utils/katana/index';
 
 /**
- * Convert sqrtPriceX96 to token prices
+ * Append historical data for a token by fetching older swaps
+ * Works backward from oldest existing swap
  */
-function sqrtPriceX96ToTokenPrices(
-  sqrtPriceX96: string,
-  token0Decimals: number,
-  token1Decimals: number
-): { token0Price: number; token1Price: number } {
-  try {
-    const Q192 = BigInt(2) ** BigInt(192);
-    const sqrtPrice = BigInt(sqrtPriceX96);
-    const price = sqrtPrice * sqrtPrice;
-    
-    const token0DecimalsBN = BigInt(10) ** BigInt(token0Decimals);
-    const token1DecimalsBN = BigInt(10) ** BigInt(token1Decimals);
-    
-    // Convert to regular numbers for calculation
-    const priceNumber = Number(price) / Number(Q192);
-    const token0Price = priceNumber * Number(token0DecimalsBN) / Number(token1DecimalsBN);
-    const token1Price = 1 / token0Price;
-    
-    return { token0Price, token1Price };
-  } catch (error) {
-    console.error("Error calculating price from sqrtPriceX96:", error);
-    return { token0Price: 0, token1Price: 0 };
-  }
-}
-
-function getHistoricalSwapsQuery() {
-  return `
-    query GetHistoricalSwaps($poolId: String!, $olderThan: Int!, $first: Int!, $skip: Int!) {
-      swaps(
-        where: { pool: $poolId, timestamp_lt: $olderThan }
-        orderBy: timestamp
-        orderDirection: desc
-        first: $first
-        skip: $skip
-      ) {
-        id
-        timestamp
-        token0 { id symbol name decimals }
-        token1 { id symbol name decimals }
-        token0PriceUSD
-        token1PriceUSD
-        amount0USD
-        amount1USD
-        amountUSD
-        sqrtPriceX96
-        pool { id }
-      }
-    }
-  `;
-}
-
-function processSwaps(rawSwaps: SwapData[], isToken0: boolean): ProcessedSwap[] {
-  return rawSwaps.map((swap) => {
-    // Calculate correct price from sqrtPriceX96
-    const prices = sqrtPriceX96ToTokenPrices(
-      swap.sqrtPriceX96,
-      parseInt(swap.token0.decimals),
-      parseInt(swap.token1.decimals)
-    );
-    
-    let correctTokenPrice: number;
-    
-    // For USDC pairs, use direct USD pricing (USDC = $1)
-    if (swap.token1.id.toLowerCase() === USDC_KATANA) {
-      // USDC is token1, so token0Price gives price in USDC terms (= USD)
-      correctTokenPrice = isToken0 ? prices.token0Price : 1.0;
-    } else if (swap.token0.id.toLowerCase() === USDC_KATANA) {
-      // USDC is token0, so token1Price gives price in USDC terms (= USD)
-      correctTokenPrice = isToken0 ? 1.0 : prices.token1Price;
-    } else if (swap.token1.id.toLowerCase() === AUSD_KATANA) {
-      // AUSD is token1, so token0Price gives price in AUSD terms (= USD)
-      correctTokenPrice = isToken0 ? prices.token0Price : 1.0;
-    } else if (swap.token0.id.toLowerCase() === AUSD_KATANA) {
-      // AUSD is token0, so token1Price gives price in AUSD terms (= USD)
-      correctTokenPrice = isToken0 ? 1.0 : prices.token1Price;
-    } else {
-      // For non-stable pairs, fallback to token price from sqrtPriceX96
-      // Note: This won't have USD conversion for non-stable pairs
-      // You may want to add getTokenUSDPrice logic here if needed
-      correctTokenPrice = isToken0 ? prices.token0Price : prices.token1Price;
-      console.warn(`Non-stablecoin pair detected, using fallback price calculation`);
-    }
-    
-    return {
-      id: swap.id,
-      timestamp: parseInt(swap.timestamp, 10) * 1000, // sec -> ms
-      tokenPriceUSD: correctTokenPrice,
-      tokenVolumeUSD: isToken0
-        ? Math.abs(parseFloat(swap.amount0USD || "0"))
-        : Math.abs(parseFloat(swap.amount1USD || "0")),
-      totalVolumeUSD: parseFloat(swap.amountUSD || "0"),
-    };
-  });
-}
-
-function convertToModelFormat(
-  processed: ProcessedSwap[],
-  existingSwap: ExistingSwapInfo,
-  tokenAddress: string
-): any[] {
-  const tokenAddr = tokenAddress.toLowerCase();
-  return processed.map((swap) => ({
-    id: swap.id,
-    pool_id: existingSwap.pool_id,
-    pool_token0_address: existingSwap.pool_token0_address,
-    pool_token0_symbol: existingSwap.pool_token0_symbol,
-    pool_token1_address: existingSwap.pool_token1_address,
-    pool_token1_symbol: existingSwap.pool_token1_symbol,
-    pool_fee_tier: existingSwap.pool_fee_tier,
-    token_address: tokenAddr,
-    is_token0: existingSwap.is_token0,
-    timestamp: new Date(swap.timestamp),
-    block_number: 0, // not provided by this query
-    token_price_usd: swap.tokenPriceUSD,
-    token_volume_usd: swap.tokenVolumeUSD,
-    total_volume_usd: swap.totalVolumeUSD,
-    tx_hash: swap.id.split("-")[0], // txhash-logIndex
-  }));
-}
-
-/**
- * Load swap data from Redis cache
- */
-async function loadRedisSwapData(tokenAddress: string): Promise<RedisSwapData | null> {
-  try {
-    const cacheKey = `${FULL_SWAP_DATA_PREFIX}${tokenAddress.toLowerCase()}`;
-    console.log(`[Redis Fallback] Loading data from Redis key: ${cacheKey}`);
-    
-    const cached = await getValue(cacheKey);
-    if (!cached) {
-      console.log(`[Redis Fallback] No data found in Redis`);
-      return null;
-    }
-
-    const redisData = JSON.parse(cached) as RedisSwapData;
-    console.log(`[Redis Fallback] Found Redis data:`, {
-      swapsCount: redisData.swaps.length,
-      poolId: redisData.metadata.pool.id,
-      lastSwapTimestamp: redisData.metadata.lastSwapTimestamp,
-    });
-
-    return redisData;
-  } catch (error) {
-    console.error(`[Redis Fallback] Error loading from Redis:`, error);
-    return null;
-  }
-}
-
-/**
- * Convert Redis data to ExistingSwapInfo format
- */
-function createSwapInfoFromRedis(redisData: RedisSwapData): ExistingSwapInfo {
-  return {
-    pool_id: redisData.metadata.pool.id,
-    pool_token0_address: redisData.metadata.pool.token0.id,
-    pool_token0_symbol: redisData.metadata.pool.token0.symbol,
-    pool_token1_address: redisData.metadata.pool.token1.id,
-    pool_token1_symbol: redisData.metadata.pool.token1.symbol,
-    pool_fee_tier: parseInt(redisData.metadata.pool.feeTier),
-    is_token0: redisData.metadata.isToken0,
-  };
-}
-
-async function fetchHistoricalSwaps(
-  poolId: string,
-  olderThanTimestampSec: number,
-  maxSwaps: number = MAX_TOTAL_SWAPS
-): Promise<SwapData[]> {
-  const all: SwapData[] = [];
-  let hasMore = true;
-  let skip = 0;
-  const batchSize = 1000;
-
-  console.log(
-    `[Historical MySQL] Fetching swaps for pool ${poolId} older than ${new Date(
-      olderThanTimestampSec * 1000
-    ).toISOString()}`
-  );
-
-  while (hasMore && all.length < maxSwaps && skip <= MAX_SKIP_LIMIT) {
-    const remaining = maxSwaps - all.length;
-    const first = Math.min(batchSize, remaining);
-
-    if (MAX_SKIP_LIMIT - skip <= 0 && skip > 0) {
-      console.log(`[Historical MySQL] Reached maximum skip limit (${MAX_SKIP_LIMIT})`);
-      break;
-    }
-
-    try {
-      const response = await axios.post<SushiGraphResponse>(
-        KATANA_SUBGRAPH_URL,
-        {
-          query: getHistoricalSwapsQuery(),
-          variables: { poolId, olderThan: olderThanTimestampSec, first, skip },
-        },
-        { timeout: 15000, headers: { "Content-Type": "application/json" } }
-      );
-
-      const swaps = response.data?.data?.swaps ?? [];
-      if (!swaps.length) {
-        hasMore = false;
-        break;
-      }
-
-      all.push(...swaps);
-
-      if (swaps.length < first) {
-        hasMore = false;
-      } else {
-        skip += batchSize;
-      }
-
-      console.log(
-        `[Historical MySQL] Batch: skip=${skip}, received=${swaps.length}, total=${all.length}`
-      );
-    } catch (e: any) {
-      console.error(
-        `[Historical MySQL] Error fetching batch at skip ${skip}:`,
-        e?.message ?? e
-      );
-      break;
-    }
-
-    await new Promise((r) => setTimeout(r, 500));
-  }
-
-  console.log(`[Historical MySQL] Fetch complete: ${all.length} swaps`);
-  return all;
-}
-
-function checkUpdateLock(tokenAddress: string): boolean {
-  const t = updateLocks.get(tokenAddress);
-  if (!t) return false;
-  if (Date.now() - t > UPDATE_LOCK_TIMEOUT) {
-    updateLocks.delete(tokenAddress);
-    return false;
-  }
-  return true;
-}
-function setUpdateLock(tokenAddress: string): void {
-  updateLocks.set(tokenAddress, Date.now());
-}
-function clearUpdateLock(tokenAddress: string): void {
-  updateLocks.delete(tokenAddress);
-}
-
-/* ===========================
- * Controller
- * =========================== */
-
-export async function appendHistoricalKatanaSwapData(
-  req: Request<
-    {},
-    {},
-    {},
-    { tokenAddress?: string; batchCount?: string }
-  >,
+export async function appendHistoricalData(
+  req: Request<{}, {}, {}, { tokenAddress?: string; batchCount?: string }>,
   res: Response,
-  _next: NextFunction
+  next: NextFunction
 ): Promise<void> {
-  // Simple option: declare as union and use optional chaining for rollback/commit
-  let transaction: Transaction | null = null;
-
   try {
     const { tokenAddress, batchCount = "1" } = req.query;
 
     // Validation
     if (!tokenAddress) {
-      res.status(400).json({ status: "error", msg: "tokenAddress parameter is required" });
-      return;
-    }
-    if (!/^0x[a-f0-9]{40}$/i.test(tokenAddress)) {
-      res.status(422).json({ status: "error", msg: "Invalid tokenAddress format" });
-      return;
-    }
-
-    const batchCountNum = parseInt(batchCount, 10);
-    if (isNaN(batchCountNum) || batchCountNum < 1 || batchCountNum > 5) {
       res.status(400).json({
         status: "error",
-        msg: "batchCount must be a number between 1 and 5",
+        msg: "tokenAddress parameter is required",
       });
       return;
     }
 
     const normalizedAddress = tokenAddress.toLowerCase();
+    const batchCountNum = Math.max(1, Math.min(parseInt(batchCount, 10) || 1, 10));
 
-    console.log(
-      `[Historical MySQL] Starting historical data append for: ${normalizedAddress}, batches: ${batchCountNum}`
-    );
-
-    await sushiLimiter.schedule(async () => {
-      try {
-        // Lock
-        if (checkUpdateLock(normalizedAddress)) {
-          res.status(423).json({
-            status: "error",
-            msg: "Update in progress for this token. Please try again later.",
-            tokenAddress: normalizedAddress,
-          });
-          return;
-        }
-        setUpdateLock(normalizedAddress);
-
-        // Step 1: Check MySQL first, then fallback to Redis if no data
-        const existingCount = await KatanaSwap.count({
-          where: { token_address: normalizedAddress },
-        });
-
-        let poolIdToUse: string;
-        let oldestTimestamp: Date;
-        let existingSwapForPoolInfo: ExistingSwapInfo;
-
-        if (existingCount === 0) {
-          console.log(`[Historical MySQL] No existing MySQL data, checking Redis...`);
-          
-          // Load from Redis
-          const redisData = await loadRedisSwapData(normalizedAddress);
-          
-          if (!redisData) {
-            clearUpdateLock(normalizedAddress);
-            res.status(404).json({
-              status: "error",
-              msg: "No existing data found in MySQL or Redis. Please run regular fetch first to establish baseline data.",
-              tokenAddress: normalizedAddress,
-            });
-            return;
-          }
-
-          // Use Redis data to determine pool and timestamp
-          poolIdToUse = redisData.metadata.pool.id;
-          oldestTimestamp = new Date(
-            Math.min(...redisData.swaps.map(s => s.timestamp)) // Find oldest swap from Redis
-          );
-          existingSwapForPoolInfo = createSwapInfoFromRedis(redisData);
-
-          console.log(`[Historical MySQL] Using Redis data:`, {
-            poolId: poolIdToUse,
-            oldestSwap: oldestTimestamp.toISOString(),
-            swapsCount: redisData.swaps.length,
-            isToken0: existingSwapForPoolInfo.is_token0,
-          });
-
-        } else {
-          console.log(`[Historical MySQL] Found existing MySQL data: ${existingCount} swaps`);
-          
-          // Use MySQL data (existing logic)
-          const [oldestSwap, existingSwapForPoolInfoRaw] = await Promise.all([
-            KatanaSwap.findOne({
-              attributes: ["timestamp"],
-              where: { token_address: normalizedAddress },
-              order: [["timestamp", "ASC"]],
-              raw: true,
-            }) as Promise<{ timestamp: Date } | null>,
-            KatanaSwap.findOne({
-              attributes: [
-                "pool_id",
-                "pool_token0_address",
-                "pool_token0_symbol",
-                "pool_token1_address",
-                "pool_token1_symbol",
-                "pool_fee_tier",
-                "is_token0",
-              ],
-              where: { token_address: normalizedAddress },
-              raw: true,
-            }) as Promise<ExistingSwapInfo | null>,
-          ]);
-
-          if (!oldestSwap || !existingSwapForPoolInfoRaw) {
-            clearUpdateLock(normalizedAddress);
-            res.status(404).json({
-              status: "error",
-              msg: "No existing swap data found",
-              tokenAddress: normalizedAddress,
-            });
-            return;
-          }
-
-          poolIdToUse = existingSwapForPoolInfoRaw.pool_id;
-          oldestTimestamp = oldestSwap.timestamp;
-          existingSwapForPoolInfo = existingSwapForPoolInfoRaw;
-        }
-
-        console.log(`[Historical MySQL] Current data stats:`, {
-          totalSwaps: existingCount,
-          oldestSwap: oldestTimestamp.toISOString(),
-          poolId: existingSwapForPoolInfo.pool_id,
-          isToken0: existingSwapForPoolInfo.is_token0,
-          dataSource: existingCount > 0 ? 'MySQL' : 'Redis',
-        });
-
-        const isToken0 = existingSwapForPoolInfo.is_token0;
-
-        console.log(`[Historical MySQL] Using pool: ${poolIdToUse}, isToken0: ${isToken0}`);
-
-        // Fetch historical in batches
-        let allHistorical: ProcessedSwap[] = [];
-
-        const currentOldestSec = Math.floor(oldestTimestamp.getTime() / 1000);
-        console.log(
-          `[Historical MySQL] Current oldest timestamp: ${currentOldestSec} (${new Date(
-            currentOldestSec * 1000
-          ).toISOString()})`
-        );
-
-        for (let batch = 1; batch <= batchCountNum; batch++) {
-          const olderThanSec =
-            batch === 1
-              ? currentOldestSec
-              : Math.min(...allHistorical.map((s) => Math.floor(s.timestamp / 1000)));
-
-          console.log(
-            `[Historical MySQL] Starting batch ${batch}/${batchCountNum}, fetching swaps older than ${new Date(
-              olderThanSec * 1000
-            ).toISOString()}`
-          );
-
-          const historicalRaw = await fetchHistoricalSwaps(
-            poolIdToUse.toLowerCase(),
-            olderThanSec,
-            MAX_TOTAL_SWAPS
-          );
-
-          if (historicalRaw.length === 0) {
-            console.log(`[Historical MySQL] No more historical data available in batch ${batch}`);
-            break;
-          }
-
-          const processed = processSwaps(historicalRaw, isToken0);
-          allHistorical = [...allHistorical, ...processed];
-
-          console.log(
-            `[Historical MySQL] Batch ${batch} complete: ${processed.length} swaps added, total historical: ${allHistorical.length}`
-          );
-
-          if (processed.length > 0) {
-            const newestInBatch = Math.max(...processed.map((s) => s.timestamp));
-            const oldestInBatch = Math.min(...processed.map((s) => s.timestamp));
-            console.log(
-              `[Historical MySQL] Batch ${batch} time range: ${new Date(
-                newestInBatch
-              ).toISOString()} to ${new Date(oldestInBatch).toISOString()}`
-            );
-          }
-
-          if (batch < batchCountNum) {
-            console.log(`[Historical MySQL] Waiting 2 seconds before next batch...`);
-            await new Promise((r) => setTimeout(r, 2000));
-          }
-        }
-
-        if (allHistorical.length === 0) {
-          clearUpdateLock(normalizedAddress);
-          res.status(200).json({
-            status: "success",
-            msg: "No additional historical data found",
-            tokenAddress: normalizedAddress,
-            poolId: poolIdToUse,
-            chain: "katana",
-            stats: {
-              existingSwaps: existingCount,
-              historicalSwapsAdded: 0,
-              totalSwaps: existingCount,
-              batchesProcessed: 0,
-            },
-          });
-          return;
-        }
-
-        console.log(`[Historical MySQL] Total historical swaps fetched: ${allHistorical.length}`);
-
-        // Insert
-        transaction = await sequelize.transaction();
-        try {
-          const rows = convertToModelFormat(allHistorical, existingSwapForPoolInfo, normalizedAddress);
-
-          await KatanaSwap.bulkCreate(rows, {
-            transaction,
-            ignoreDuplicates: true,
-          });
-
-          await transaction.commit();
-          transaction = null;
-
-          console.log(`[Historical MySQL] Successfully inserted ${rows.length} swaps`);
-        } catch (insertError: any) {
-          await transaction?.rollback();
-          transaction = null;
-          throw insertError;
-        }
-
-        // Final stats
-        const finalCount = await KatanaSwap.count({
-          where: { token_address: normalizedAddress, pool_id: poolIdToUse.toLowerCase() },
-        });
-
-        const [oldestFinal, newestFinal] = await Promise.all([
-          KatanaSwap.findOne({
-            attributes: ["timestamp"],
-            where: { token_address: normalizedAddress, pool_id: poolIdToUse.toLowerCase() },
-            order: [["timestamp", "ASC"]],
-            raw: true,
-          }) as Promise<{ timestamp: Date } | null>,
-          KatanaSwap.findOne({
-            attributes: ["timestamp"],
-            where: { token_address: normalizedAddress, pool_id: poolIdToUse.toLowerCase() },
-            order: [["timestamp", "DESC"]],
-            raw: true,
-          }) as Promise<{ timestamp: Date } | null>,
-        ]);
-
-        clearUpdateLock(normalizedAddress);
-
-        res.status(200).json({
-          status: "success",
-          msg: "Historical data appended successfully",
-          tokenAddress: normalizedAddress,
-          poolId: poolIdToUse.toLowerCase(),
-          chain: "katana",
-          dataSource: existingCount > 0 ? 'MySQL' : 'Redis-initiated',
-          stats: {
-            existingSwaps: existingCount,
-            historicalSwapsAdded: allHistorical.length,
-            totalSwaps: finalCount,
-            batchesProcessed: batchCountNum,
-          },
-          dataRange: {
-            oldStart: oldestTimestamp.toISOString(),
-            newStart: oldestFinal?.timestamp.toISOString(),
-            end: newestFinal?.timestamp.toISOString(),
-            totalDaysAdded: oldestFinal
-              ? Math.floor(
-                  (oldestTimestamp.getTime() - oldestFinal.timestamp.getTime()) /
-                    (24 * 60 * 60 * 1000)
-                )
-              : 0,
-          },
-          limits: { maxSwapsPerBatch: MAX_TOTAL_SWAPS, maxSkip: MAX_SKIP_LIMIT },
-        });
-      } catch (apiError: any) {
-        await transaction?.rollback(); // optional chaining — simple & safe
-        transaction = null;
-
-        clearUpdateLock(normalizedAddress);
-
-        console.error(`[Historical MySQL] API error:`, apiError?.message);
-        res.status(500).json({
-          status: "error",
-          msg: "Failed to append historical swap data",
-          debug: { error: apiError?.message },
-        });
-      } finally {
-        // In case of any unhandled path where txn remained open:
-        await transaction?.rollback().catch(() => {});
-        transaction = null;
-      }
+    console.log(`[Historical Append] Processing request:`, {
+      tokenAddress: normalizedAddress,
+      batchCount: batchCountNum,
     });
-  } catch (error: any) {
-    //@ts-ignore
-    await transaction?.rollback().catch(() => {});
-    transaction = null;
 
-    if (req.query.tokenAddress) {
-      clearUpdateLock(req.query.tokenAddress.toLowerCase());
+    // Check in-memory lock
+    if (checkInMemoryLock(normalizedAddress)) {
+      console.log(`[Historical Append] Update already in progress`);
+      res.status(429).json({
+        status: "error",
+        msg: "Historical update already in progress for this token",
+        tokenAddress: normalizedAddress,
+      });
+      return;
     }
 
-    console.error("[Historical MySQL] Controller error:", error);
+    // Set in-memory lock
+    setInMemoryLock(normalizedAddress);
+
+    try {
+      // Check existing MySQL data
+      const existingCount = await getSwapCount(normalizedAddress);
+      
+      console.log(`[Historical Append] Existing MySQL count: ${existingCount}`);
+
+      let poolIdToUse: string;
+      let oldestTimestamp: Date;
+      let existingSwapForPoolInfo: ExistingSwapInfo;
+
+      if (existingCount === 0) {
+        // Try Redis fallback
+        console.log(`[Historical Append] No MySQL data, checking Redis`);
+        
+        const redisData: RedisSwapData | null = await loadRedisSwapData(normalizedAddress);
+
+        if (!redisData || !redisData.swaps || redisData.swaps.length === 0) {
+          clearInMemoryLock(normalizedAddress);
+          res.status(404).json({
+            status: "error",
+            msg: "No existing data found in MySQL or Redis. Please fetch initial data first.",
+            tokenAddress: normalizedAddress,
+          });
+          return;
+        }
+
+        console.log(`[Historical Append] Found Redis data: ${redisData.swaps.length} swaps`);
+
+        // Use Redis data
+        poolIdToUse = redisData.metadata.pool.id;
+        const oldestSwapTimestamp = Math.min(...redisData.swaps.map(s => s.timestamp));
+        oldestTimestamp = new Date(oldestSwapTimestamp);
+
+        existingSwapForPoolInfo = {
+          pool_id: redisData.metadata.pool.id,
+          pool_token0_address: redisData.metadata.pool.token0.id,
+          pool_token0_symbol: redisData.metadata.pool.token0.symbol,
+          pool_token1_address: redisData.metadata.pool.token1.id,
+          pool_token1_symbol: redisData.metadata.pool.token1.symbol,
+          pool_fee_tier: parseInt(redisData.metadata.pool.feeTier),
+          is_token0: redisData.metadata.isToken0,
+        };
+
+        console.log(`[Historical Append] Using Redis data as baseline:`, {
+          poolId: poolIdToUse,
+          oldestSwap: oldestTimestamp.toISOString(),
+          isToken0: existingSwapForPoolInfo.is_token0,
+        });
+
+      } else {
+        // Use MySQL data
+        console.log(`[Historical Append] Found MySQL data: ${existingCount} swaps`);
+
+        const oldestSwap = await getOldestSwapTimestamp(normalizedAddress);
+        const existingSwapInfo = await getExistingSwapInfo(normalizedAddress);
+
+        if (!oldestSwap || !existingSwapInfo) {
+          clearInMemoryLock(normalizedAddress);
+          res.status(404).json({
+            status: "error",
+            msg: "No existing swap data found",
+            tokenAddress: normalizedAddress,
+          });
+          return;
+        }
+
+        poolIdToUse = existingSwapInfo.pool_id;
+        oldestTimestamp = oldestSwap;
+        existingSwapForPoolInfo = existingSwapInfo;
+      }
+
+      console.log(`[Historical Append] Current data stats:`, {
+        totalSwaps: existingCount,
+        oldestSwap: oldestTimestamp.toISOString(),
+        poolId: poolIdToUse,
+        isToken0: existingSwapForPoolInfo.is_token0,
+        dataSource: existingCount > 0 ? 'MySQL' : 'Redis',
+      });
+
+      const isToken0 = existingSwapForPoolInfo.is_token0;
+
+      // Fetch historical data in batches
+      let allHistorical: ProcessedSwap[] = [];
+      const currentOldestSec = Math.floor(oldestTimestamp.getTime() / 1000);
+
+      console.log(`[Historical Append] Starting historical fetch from: ${new Date(currentOldestSec * 1000).toISOString()}`);
+
+      for (let batch = 1; batch <= batchCountNum; batch++) {
+        const olderThanSec = batch === 1
+          ? currentOldestSec
+          : Math.min(...allHistorical.map((s) => Math.floor(s.timestamp / 1000)));
+
+        console.log(`[Historical Append] Batch ${batch}/${batchCountNum}, fetching swaps older than ${new Date(olderThanSec * 1000).toISOString()}`);
+
+        const historicalRaw = await fetchHistoricalSwaps(
+          poolIdToUse.toLowerCase(),
+          olderThanSec,
+          MAX_TOTAL_SWAPS,
+          MAX_SKIP_LIMIT
+        );
+
+        if (historicalRaw.length === 0) {
+          console.log(`[Historical Append] No more historical data in batch ${batch}`);
+          break;
+        }
+
+        const processed = processSwaps(historicalRaw, isToken0);
+        allHistorical = [...allHistorical, ...processed];
+
+        console.log(`[Historical Append] Batch ${batch} complete: ${processed.length} swaps, total: ${allHistorical.length}`);
+
+        if (processed.length > 0) {
+          const newestInBatch = Math.max(...processed.map(s => s.timestamp));
+          const oldestInBatch = Math.min(...processed.map(s => s.timestamp));
+          console.log(`[Historical Append] Batch time range: ${new Date(newestInBatch).toISOString()} to ${new Date(oldestInBatch).toISOString()}`);
+        }
+
+        if (batch < batchCountNum) {
+          console.log(`[Historical Append] Waiting 2 seconds before next batch...`);
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      }
+
+      if (allHistorical.length === 0) {
+        clearInMemoryLock(normalizedAddress);
+        res.status(200).json({
+          status: "success",
+          msg: "No additional historical data found",
+          tokenAddress: normalizedAddress,
+          poolId: poolIdToUse,
+          chain: "katana",
+          stats: {
+            existingSwaps: existingCount,
+            historicalSwapsAdded: 0,
+            totalSwaps: existingCount,
+            batchesProcessed: 0,
+          },
+        });
+        return;
+      }
+
+      console.log(`[Historical Append] Total historical swaps fetched: ${allHistorical.length}`);
+
+      // Insert into MySQL
+      const rows = convertToModelFormat(allHistorical, existingSwapForPoolInfo, normalizedAddress);
+      const insertResult = await bulkInsertSwaps(rows);
+
+      if (!insertResult.success) {
+        throw new Error(`Failed to insert swaps: ${insertResult.error}`);
+      }
+
+      console.log(`[Historical Append] Successfully inserted ${rows.length} swaps`);
+
+      // Get final stats
+      const finalStats = await getMySQLSwapStats(normalizedAddress, poolIdToUse.toLowerCase());
+
+      clearInMemoryLock(normalizedAddress);
+
+      res.status(200).json({
+        status: "success",
+        msg: "Historical data appended successfully",
+        tokenAddress: normalizedAddress,
+        poolId: poolIdToUse.toLowerCase(),
+        chain: "katana",
+        dataSource: existingCount > 0 ? 'MySQL' : 'Redis-initiated',
+        stats: {
+          existingSwaps: existingCount,
+          historicalSwapsAdded: allHistorical.length,
+          totalSwaps: finalStats.count,
+          batchesProcessed: batchCountNum,
+        },
+        dataRange: {
+          oldStart: oldestTimestamp.toISOString(),
+          newStart: finalStats.oldestTimestamp?.toISOString(),
+          end: finalStats.newestTimestamp?.toISOString(),
+          totalDaysAdded: finalStats.oldestTimestamp
+            ? Math.floor((oldestTimestamp.getTime() - finalStats.oldestTimestamp.getTime()) / (24 * 60 * 60 * 1000))
+            : 0,
+        },
+        limits: {
+          maxSwapsPerBatch: MAX_TOTAL_SWAPS,
+          maxSkip: MAX_SKIP_LIMIT,
+        },
+      });
+
+    } catch (apiError: any) {
+      clearInMemoryLock(normalizedAddress);
+
+      console.error(`[Historical Append] API error:`, apiError.message);
+      res.status(500).json({
+        status: "error",
+        msg: "Failed to append historical swap data",
+        debug: { error: apiError.message },
+      });
+    }
+
+  } catch (error: any) {
+    if (req.query.tokenAddress) {
+      clearInMemoryLock(req.query.tokenAddress.toLowerCase());
+    }
+
+    console.error("[Historical Append] Controller error:", error);
     res.status(500).json({
       status: "error",
       msg: "Unexpected server error",
-      debug: { error: error?.message },
+      debug: { error: error.message },
     });
   }
 }
