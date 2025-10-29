@@ -6,37 +6,51 @@ import {
   
   // Types
   Pool,
-  StoredSwapData,
   
   // Utilities
   fetchPoolsByTVL,
   selectBestPool,
   fetchSwaps,
   processSwaps,
-  mergeSwaps,
   getFullTimeRange,
   getIncrementalTimeRange,
   needsUpdate,
-  loadSwapDataFromRedis,
-  saveSwapDataToRedis,
   checkUpdateLock,
   setUpdateLock,
   clearUpdateLock,
-  loadHistoricalSwapsFromMySQL,
-  mergeWithHistoricalSwaps,
-} from "../utils/katana/index"
+  getExistingSwapInfo,
+} from '../utils/katana/index';
+
+import {
+  generateFiveMinuteCandles,
+  convertCandlesToModelFormat,
+  aggregateCandlesToTimeframe,
+  mergeCandles,
+  type Candle,
+} from '../utils/katana/candleGeneration';
+
+import {
+  loadCandlesFromMySQL,
+  bulkInsertCandles,
+} from '../utils/katana/candleOperations';
+
+import {
+  loadCandleDataFromRedis,
+  saveCandleDataToRedis,
+  type StoredCandleData,
+} from '../utils/katana/redisCandleOperations';
 
 /**
- * Get OHLC data for Katana tokens with incremental updates
- * Combines Redis cache + MySQL historical data
+ * Get OHLC candle data for Katana tokens
+ * Returns pre-computed 5m candles (or aggregated timeframes)
  */
 export async function getKatanaSwapData(
-  req: Request<{}, {}, {}, { tokenAddress?: string; days?: string }>,
+  req: Request<{}, {}, {}, { tokenAddress?: string; days?: string; timeframe?: string }>,
   res: Response,
   next: NextFunction
 ): Promise<void> {
   try {
-    const { tokenAddress, days = "365" } = req.query;
+    const { tokenAddress, days = "365", timeframe = "5m" } = req.query;
 
     // Validation
     if (!tokenAddress) {
@@ -49,16 +63,18 @@ export async function getKatanaSwapData(
 
     const normalizedAddress = tokenAddress.toLowerCase();
     const daysNum = Math.min(parseInt(days, 10) || 365, FULL_DATA_DAYS);
+    const requestedTimeframe = timeframe as '5m' | '15m' | '30m' | '1h' | '4h' | '1d' | '1w';
 
-    console.log(`[Katana Incremental] Processing request:`, {
+    console.log(`[Katana Candles] Processing request:`, {
       tokenAddress: normalizedAddress,
       days: daysNum,
+      timeframe: requestedTimeframe,
     });
 
     // Check if update is in progress
     const isLocked = await checkUpdateLock(normalizedAddress);
     if (isLocked) {
-      console.log(`[Katana Incremental] Update in progress, returning 429`);
+      console.log(`[Katana Candles] Update in progress, returning 429`);
       res.status(429).json({
         status: "error",
         msg: "Update already in progress for this token",
@@ -71,18 +87,17 @@ export async function getKatanaSwapData(
     await setUpdateLock(normalizedAddress);
 
     try {
-      // Load cached data
-      const storedData = await loadSwapDataFromRedis(normalizedAddress);
+      // Load cached 5m candles
+      const storedData = await loadCandleDataFromRedis(normalizedAddress, '5m');
 
       // Determine if we need to fetch new data
-      const shouldUpdate = !storedData || 
-        needsUpdate(storedData.metadata.lastUpdate);
+      const shouldUpdate = !storedData || needsUpdate(storedData.metadata.lastUpdate);
 
       let selectedPool: Pool;
-      let allSwaps = storedData?.swaps || [];
+      let allCandles: Candle[] = storedData?.candles || [];
 
       if (shouldUpdate) {
-        console.log(`[Katana Incremental] Fetching new data from subgraph`);
+        console.log(`[Katana Candles] Fetching new data from subgraph`);
 
         // Fetch pools and select best one
         const pools = await fetchPoolsByTVL(normalizedAddress);
@@ -99,48 +114,49 @@ export async function getKatanaSwapData(
 
         selectedPool = selectBestPool(pools, normalizedAddress);
 
-        console.log(`[Katana Incremental] Selected pool:`, {
+        console.log(`[Katana Candles] Selected pool:`, {
           poolId: selectedPool.id,
           pair: `${selectedPool.token0.symbol}/${selectedPool.token1.symbol}`,
-          tvl: selectedPool.totalValueLockedUSD,
         });
 
-        // Determine if token is token0
         const isToken0 = selectedPool.token0.id.toLowerCase() === normalizedAddress;
         const baseToken = isToken0 ? selectedPool.token0 : selectedPool.token1;
         const quoteToken = isToken0 ? selectedPool.token1 : selectedPool.token0;
 
         // Fetch swaps (incremental or full)
         let newSwaps;
-        if (storedData?.metadata.lastSwapTimestamp) {
-          // Incremental update
+        if (storedData?.metadata.lastCandleTimestamp) {
           const { startTime, endTime } = getIncrementalTimeRange(
-            Math.floor(storedData.metadata.lastSwapTimestamp / 1000)
+            Math.floor(storedData.metadata.lastCandleTimestamp / 1000)
           );
-          console.log(`[Katana Incremental] Incremental fetch from ${new Date(startTime * 1000).toISOString()}`);
+          console.log(`[Katana Candles] Incremental fetch`);
           newSwaps = await fetchSwaps(selectedPool.id, startTime, endTime);
         } else {
-          // Full fetch
           const { startTime, endTime } = getFullTimeRange();
-          console.log(`[Katana Incremental] Full fetch from ${new Date(startTime * 1000).toISOString()}`);
+          console.log(`[Katana Candles] Full fetch`);
           newSwaps = await fetchSwaps(selectedPool.id, startTime, endTime);
         }
 
-        // Process and merge swaps
-        const processedNewSwaps = processSwaps(newSwaps, isToken0);
-        const existingSwaps = storedData?.swaps || [];
-        allSwaps = mergeSwaps(existingSwaps, processedNewSwaps);
+        // Process swaps and generate 5m candles
+        const processedSwaps = processSwaps(newSwaps, isToken0);
+        const newCandles = generateFiveMinuteCandles(processedSwaps);
+        
+        console.log(`[Katana Candles] Generated ${newCandles.length} new 5m candles from ${processedSwaps.length} swaps`);
 
-        console.log(`[Katana Incremental] Merged: ${existingSwaps.length} existing + ${processedNewSwaps.length} new = ${allSwaps.length} total`);
+        // Merge with existing candles
+        const existingCandles = storedData?.candles || [];
+        allCandles = mergeCandles(existingCandles, newCandles);
+
+        console.log(`[Katana Candles] Merged: ${existingCandles.length} existing + ${newCandles.length} new = ${allCandles.length} total`);
 
         // Prepare updated stored data
         const now = Math.floor(Date.now() / 1000);
-        const lastSwapTimestamp = allSwaps.length > 0
-          ? Math.max(...allSwaps.map(s => s.timestamp))
+        const lastCandleTimestamp = allCandles.length > 0
+          ? Math.max(...allCandles.map(c => c.timestamp))
           : now * 1000;
 
-        const updatedStoredData: StoredSwapData = {
-          swaps: allSwaps,
+        const updatedStoredData: StoredCandleData = {
+          candles: allCandles,
           metadata: {
             token: {
               address: baseToken.id,
@@ -160,20 +176,29 @@ export async function getKatanaSwapData(
             isToken0,
             quoteToken,
             lastUpdate: now,
-            lastSwapTimestamp,
+            lastCandleTimestamp,
             dataRange: {
-              start: allSwaps.length > 0 ? Math.min(...allSwaps.map(s => s.timestamp)) : now * 1000,
-              end: lastSwapTimestamp,
+              start: allCandles.length > 0 ? Math.min(...allCandles.map(c => c.timestamp)) : now * 1000,
+              end: lastCandleTimestamp,
             },
             chain: "katana",
             dexId: "katana-sushiswap",
+            timeframe: '5m',
           },
         };
 
-        // Save to Redis
-        await saveSwapDataToRedis(normalizedAddress, updatedStoredData);
+        // Save 5m candles to Redis
+        await saveCandleDataToRedis(normalizedAddress, updatedStoredData, '5m');
+
+        // Save 5m candles to MySQL
+        const existingSwapInfo = await getExistingSwapInfo(normalizedAddress);
+        if (existingSwapInfo) {
+          const candlesForDB = convertCandlesToModelFormat(newCandles, existingSwapInfo, normalizedAddress);
+          await bulkInsertCandles(candlesForDB);
+          console.log(`[Katana Candles] Saved ${candlesForDB.length} candles to MySQL`);
+        }
+
       } else {
-        // Use existing pool info from cache
         selectedPool = {
           id: storedData.metadata.pool.id,
           token0: storedData.metadata.pool.token0,
@@ -182,75 +207,100 @@ export async function getKatanaSwapData(
           totalValueLockedUSD: storedData.metadata.pool.totalValueLockedUSD.toString(),
           volumeUSD: storedData.metadata.pool.volumeUSD.toString(),
         };
-        console.log(`[Katana Incremental] Using cached data`);
+        console.log(`[Katana Candles] Using cached data`);
       }
 
-      // Load historical MySQL data and merge
+      // Load historical candles from MySQL and merge
       const requestedStartTime = Math.floor(Date.now() / 1000) - (daysNum * 24 * 60 * 60);
       
-      const historicalSwaps = await loadHistoricalSwapsFromMySQL(
+      const historicalCandles = await loadCandlesFromMySQL(
         normalizedAddress,
         selectedPool.id,
-        requestedStartTime
+        requestedStartTime,
+        '5m'
       );
 
-      // Filter Redis data to requested time range
-      const filteredRedisSwaps = allSwaps.filter(
-        swap => swap.timestamp >= requestedStartTime * 1000
+      // Filter Redis candles to requested time range
+      const filteredRedisCandles = allCandles.filter(
+        candle => candle.timestamp >= requestedStartTime * 1000
       );
 
-      // Merge Redis and MySQL data
-      const combinedSwaps = mergeWithHistoricalSwaps(filteredRedisSwaps, historicalSwaps);
+      // Merge Redis and MySQL candles
+      const combined5mCandles = mergeCandles(filteredRedisCandles, historicalCandles);
 
-      const responseData = {
-        swaps: combinedSwaps,
-        metadata: {
-          ...(storedData?.metadata || {}),
-          totalSwaps: combinedSwaps.length,
-          timeRange: {
-            start: requestedStartTime * 1000,
-            end: Date.now(),
-            days: daysNum,
-          },
-        },
-      };
+      // Aggregate to requested timeframe if needed
+      let finalCandles: Candle[];
+      if (requestedTimeframe === '5m') {
+        finalCandles = combined5mCandles;
+      } else {
+        console.log(`[Katana Candles] Aggregating to ${requestedTimeframe}`);
+        finalCandles = aggregateCandlesToTimeframe(combined5mCandles, requestedTimeframe);
+      }
 
       // Clear update lock
       await clearUpdateLock(normalizedAddress);
 
-      console.log(`[Katana Incremental] Sending response: ${combinedSwaps.length} swaps (${filteredRedisSwaps.length} Redis + ${historicalSwaps.length} MySQL)`);
+      console.log(`[Katana Candles] Sending response: ${finalCandles.length} ${requestedTimeframe} candles`);
 
+      // Format response to match frontend expectations
+      const isToken0 = storedData?.metadata?.isToken0 ?? 
+                       (selectedPool.token0.id.toLowerCase() === normalizedAddress);
+      
       res.status(200).json({
         status: "success",
-        data: responseData,
-        source: "katana-sushiswap-hybrid",
+        data: {
+          candles: finalCandles,
+          metadata: {
+            token: storedData?.metadata?.token || {
+              address: normalizedAddress,
+              symbol: isToken0 ? selectedPool.token0.symbol : selectedPool.token1.symbol,
+            },
+            pool: storedData?.metadata?.pool || {
+              id: selectedPool.id,
+              token0: selectedPool.token0,
+              token1: selectedPool.token1,
+            },
+            poolToken0: selectedPool.token0, // Frontend expects this
+            poolToken1: selectedPool.token1, // Frontend expects this
+            isToken0,
+            totalCandles: finalCandles.length,
+            timeframe: requestedTimeframe,
+            timeRange: {
+              start: requestedStartTime * 1000,
+              end: Date.now(),
+              days: daysNum,
+            },
+          },
+        },
+        source: "katana-sushiswap-candles",
         cached: !shouldUpdate,
         tokenAddress: normalizedAddress,
-        count: combinedSwaps.length,
+        count: finalCandles.length,
         poolId: selectedPool.id,
         poolTVL: selectedPool.totalValueLockedUSD,
         chain: "katana",
         updateStatus: shouldUpdate ? "updated" : "cached",
         dataSource: {
-          redis: filteredRedisSwaps.length,
-          mysql: historicalSwaps.length,
-          total: combinedSwaps.length,
+          redis: filteredRedisCandles.length,
+          mysql: historicalCandles.length,
+          combined5m: combined5mCandles.length,
+          finalTimeframe: finalCandles.length,
         },
       });
 
     } catch (apiError: any) {
       await clearUpdateLock(normalizedAddress);
       
-      console.error(`[Katana Incremental] API error:`, apiError.message);
+      console.error(`[Katana Candles] API error:`, apiError.message);
       res.status(500).json({
         status: "error",
-        msg: "Failed to fetch or update swap data",
+        msg: "Failed to fetch or update candle data",
         debug: { error: apiError.message },
       });
     }
 
   } catch (error: any) {
-    console.error("[Katana Incremental] Controller error:", error);
+    console.error("[Katana Candles] Controller error:", error);
     res.status(500).json({
       status: "error",
       msg: "Unexpected server error",
@@ -260,7 +310,7 @@ export async function getKatanaSwapData(
 }
 
 /**
- * Clear cache for a specific token (admin endpoint)
+ * Clear cache for a specific token
  */
 export async function clearKatanaSwapCache(
   req: Request<{}, {}, {}, { tokenAddress?: string }>,
@@ -279,9 +329,8 @@ export async function clearKatanaSwapCache(
     }
 
     const normalizedAddress = tokenAddress.toLowerCase();
-    console.log(`[Katana Incremental] Clearing cache for: ${normalizedAddress}`);
+    console.log(`[Katana Candles] Clearing cache for: ${normalizedAddress}`);
 
-    // Clear both locks
     await clearUpdateLock(normalizedAddress);
 
     res.status(200).json({
@@ -291,7 +340,7 @@ export async function clearKatanaSwapCache(
       chain: "katana",
     });
   } catch (error: any) {
-    console.error("[Katana Incremental] Clear cache error:", error);
+    console.error("[Katana Candles] Clear cache error:", error);
     res.status(500).json({
       status: "error",
       msg: "Unexpected server error",

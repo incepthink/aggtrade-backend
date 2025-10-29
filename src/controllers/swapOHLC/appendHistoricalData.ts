@@ -7,27 +7,37 @@ import {
   
   // Types
   ExistingSwapInfo,
-  ProcessedSwap,
-  RedisSwapData,
   
   // Utilities
   fetchHistoricalSwaps,
   processSwaps,
-  convertToModelFormat,
-  bulkInsertSwaps,
-  loadRedisSwapData,
   getSwapCount,
   getOldestSwapTimestamp,
   getExistingSwapInfo,
-  getMySQLSwapStats, // This is the renamed import
   checkInMemoryLock,
   setInMemoryLock,
   clearInMemoryLock,
 } from '../../utils/katana/index';
 
+import {
+  generateFiveMinuteCandles,
+  convertCandlesToModelFormat,
+  type Candle,
+} from '../../utils/katana/candleGeneration';
+
+import {
+  bulkInsertCandles,
+  getCandleStats,
+  getOldestCandleTimestamp,
+} from '../../utils/katana/candleOperations';
+
+import {
+  loadCandleDataFromRedis,
+} from '../../utils/katana/redisCandleOperations';
+
 /**
- * Append historical data for a token by fetching older swaps
- * Works backward from oldest existing swap
+ * Append historical candle data by fetching older swaps and converting to candles
+ * Works backward from oldest existing candle
  */
 export async function appendHistoricalData(
   req: Request<{}, {}, {}, { tokenAddress?: string; batchCount?: string }>,
@@ -37,7 +47,6 @@ export async function appendHistoricalData(
   try {
     const { tokenAddress, batchCount = "1" } = req.query;
 
-    // Validation
     if (!tokenAddress) {
       res.status(400).json({
         status: "error",
@@ -49,14 +58,14 @@ export async function appendHistoricalData(
     const normalizedAddress = tokenAddress.toLowerCase();
     const batchCountNum = Math.max(1, Math.min(parseInt(batchCount, 10) || 1, 10));
 
-    console.log(`[Historical Append] Processing request:`, {
+    console.log(`[Historical Candles] Processing request:`, {
       tokenAddress: normalizedAddress,
       batchCount: batchCountNum,
     });
 
     // Check in-memory lock
     if (checkInMemoryLock(normalizedAddress)) {
-      console.log(`[Historical Append] Update already in progress`);
+      console.log(`[Historical Candles] Update already in progress`);
       res.status(429).json({
         status: "error",
         msg: "Historical update already in progress for this token",
@@ -65,102 +74,113 @@ export async function appendHistoricalData(
       return;
     }
 
-    // Set in-memory lock
     setInMemoryLock(normalizedAddress);
 
     try {
-      // Check existing MySQL data
-      const existingCount = await getSwapCount(normalizedAddress);
-      
-      console.log(`[Historical Append] Existing MySQL count: ${existingCount}`);
-
+      // Check existing candle data in MySQL
       let poolIdToUse: string;
       let oldestTimestamp: Date;
       let existingSwapForPoolInfo: ExistingSwapInfo;
 
-      if (existingCount === 0) {
-        // Try Redis fallback
-        console.log(`[Historical Append] No MySQL data, checking Redis`);
+      // First check if we have candles in MySQL
+      const oldestCandleTimestamp = await getOldestCandleTimestamp(normalizedAddress, '5m');
+      
+      if (oldestCandleTimestamp) {
+        // Use candle data
+        console.log(`[Historical Candles] Found existing candles in MySQL`);
+        oldestTimestamp = oldestCandleTimestamp;
         
-        const redisData: RedisSwapData | null = await loadRedisSwapData(normalizedAddress);
-
-        if (!redisData || !redisData.swaps || redisData.swaps.length === 0) {
-          clearInMemoryLock(normalizedAddress);
-          res.status(404).json({
-            status: "error",
-            msg: "No existing data found in MySQL or Redis. Please fetch initial data first.",
-            tokenAddress: normalizedAddress,
-          });
-          return;
-        }
-
-        console.log(`[Historical Append] Found Redis data: ${redisData.swaps.length} swaps`);
-
-        // Use Redis data
-        poolIdToUse = redisData.metadata.pool.id;
-        const oldestSwapTimestamp = Math.min(...redisData.swaps.map(s => s.timestamp));
-        oldestTimestamp = new Date(oldestSwapTimestamp);
-
-        existingSwapForPoolInfo = {
-          pool_id: redisData.metadata.pool.id,
-          pool_token0_address: redisData.metadata.pool.token0.id,
-          pool_token0_symbol: redisData.metadata.pool.token0.symbol,
-          pool_token1_address: redisData.metadata.pool.token1.id,
-          pool_token1_symbol: redisData.metadata.pool.token1.symbol,
-          pool_fee_tier: parseInt(redisData.metadata.pool.feeTier),
-          is_token0: redisData.metadata.isToken0,
-        };
-
-        console.log(`[Historical Append] Using Redis data as baseline:`, {
-          poolId: poolIdToUse,
-          oldestSwap: oldestTimestamp.toISOString(),
-          isToken0: existingSwapForPoolInfo.is_token0,
-        });
-
-      } else {
-        // Use MySQL data
-        console.log(`[Historical Append] Found MySQL data: ${existingCount} swaps`);
-
-        const oldestSwap = await getOldestSwapTimestamp(normalizedAddress);
         const existingSwapInfo = await getExistingSwapInfo(normalizedAddress);
-
-        if (!oldestSwap || !existingSwapInfo) {
+        if (!existingSwapInfo) {
           clearInMemoryLock(normalizedAddress);
           res.status(404).json({
             status: "error",
-            msg: "No existing swap data found",
+            msg: "No pool info found",
             tokenAddress: normalizedAddress,
           });
           return;
         }
-
+        
         poolIdToUse = existingSwapInfo.pool_id;
-        oldestTimestamp = oldestSwap;
         existingSwapForPoolInfo = existingSwapInfo;
+        
+      } else {
+        // No candles in MySQL, check Redis
+        console.log(`[Historical Candles] No MySQL candles, checking Redis`);
+        
+        const redisData = await loadCandleDataFromRedis(normalizedAddress, '5m');
+
+        if (!redisData || !redisData.candles || redisData.candles.length === 0) {
+          // Try old swap data as fallback
+          const existingCount = await getSwapCount(normalizedAddress);
+          
+          if (existingCount === 0) {
+            clearInMemoryLock(normalizedAddress);
+            res.status(404).json({
+              status: "error",
+              msg: "No existing data found. Please fetch initial data first.",
+              tokenAddress: normalizedAddress,
+            });
+            return;
+          }
+
+          // Use swap data
+          const oldestSwap = await getOldestSwapTimestamp(normalizedAddress);
+          const existingSwapInfo = await getExistingSwapInfo(normalizedAddress);
+
+          if (!oldestSwap || !existingSwapInfo) {
+            clearInMemoryLock(normalizedAddress);
+            res.status(404).json({
+              status: "error",
+              msg: "No existing data found",
+              tokenAddress: normalizedAddress,
+            });
+            return;
+          }
+
+          poolIdToUse = existingSwapInfo.pool_id;
+          oldestTimestamp = oldestSwap;
+          existingSwapForPoolInfo = existingSwapInfo;
+        } else {
+          // Use Redis candle data
+          console.log(`[Historical Candles] Found Redis candles: ${redisData.candles.length}`);
+
+          poolIdToUse = redisData.metadata.pool.id;
+          const oldestCandleTs = Math.min(...redisData.candles.map(c => c.timestamp));
+          oldestTimestamp = new Date(oldestCandleTs);
+
+          existingSwapForPoolInfo = {
+            pool_id: redisData.metadata.pool.id,
+            pool_token0_address: redisData.metadata.pool.token0.id,
+            pool_token0_symbol: redisData.metadata.pool.token0.symbol,
+            pool_token1_address: redisData.metadata.pool.token1.id,
+            pool_token1_symbol: redisData.metadata.pool.token1.symbol,
+            pool_fee_tier: parseInt(redisData.metadata.pool.feeTier),
+            is_token0: redisData.metadata.isToken0,
+          };
+        }
       }
 
-      console.log(`[Historical Append] Current data stats:`, {
-        totalSwaps: existingCount,
-        oldestSwap: oldestTimestamp.toISOString(),
+      console.log(`[Historical Candles] Current data stats:`, {
+        oldestCandle: oldestTimestamp.toISOString(),
         poolId: poolIdToUse,
         isToken0: existingSwapForPoolInfo.is_token0,
-        dataSource: existingCount > 0 ? 'MySQL' : 'Redis',
       });
 
       const isToken0 = existingSwapForPoolInfo.is_token0;
 
-      // Fetch historical data in batches
-      let allHistorical: ProcessedSwap[] = [];
+      // Fetch historical swaps in batches
+      let allHistoricalCandles: Candle[] = [];
       const currentOldestSec = Math.floor(oldestTimestamp.getTime() / 1000);
 
-      console.log(`[Historical Append] Starting historical fetch from: ${new Date(currentOldestSec * 1000).toISOString()}`);
+      console.log(`[Historical Candles] Starting historical fetch from: ${new Date(currentOldestSec * 1000).toISOString()}`);
 
       for (let batch = 1; batch <= batchCountNum; batch++) {
         const olderThanSec = batch === 1
           ? currentOldestSec
-          : Math.min(...allHistorical.map((s) => Math.floor(s.timestamp / 1000)));
+          : Math.min(...allHistoricalCandles.map((c) => Math.floor(c.timestamp / 1000)));
 
-        console.log(`[Historical Append] Batch ${batch}/${batchCountNum}, fetching swaps older than ${new Date(olderThanSec * 1000).toISOString()}`);
+        console.log(`[Historical Candles] Batch ${batch}/${batchCountNum}, fetching swaps older than ${new Date(olderThanSec * 1000).toISOString()}`);
 
         const historicalRaw = await fetchHistoricalSwaps(
           poolIdToUse.toLowerCase(),
@@ -170,28 +190,25 @@ export async function appendHistoricalData(
         );
 
         if (historicalRaw.length === 0) {
-          console.log(`[Historical Append] No more historical data in batch ${batch}`);
+          console.log(`[Historical Candles] No more historical data in batch ${batch}`);
           break;
         }
 
-        const processed = processSwaps(historicalRaw, isToken0);
-        allHistorical = [...allHistorical, ...processed];
+        // Process swaps and generate candles
+        const processedSwaps = processSwaps(historicalRaw, isToken0);
+        const newCandles = generateFiveMinuteCandles(processedSwaps);
+        
+        allHistoricalCandles = [...allHistoricalCandles, ...newCandles];
 
-        console.log(`[Historical Append] Batch ${batch} complete: ${processed.length} swaps, total: ${allHistorical.length}`);
-
-        if (processed.length > 0) {
-          const newestInBatch = Math.max(...processed.map(s => s.timestamp));
-          const oldestInBatch = Math.min(...processed.map(s => s.timestamp));
-          console.log(`[Historical Append] Batch time range: ${new Date(newestInBatch).toISOString()} to ${new Date(oldestInBatch).toISOString()}`);
-        }
+        console.log(`[Historical Candles] Batch ${batch} complete: ${historicalRaw.length} swaps → ${newCandles.length} candles, total: ${allHistoricalCandles.length} candles`);
 
         if (batch < batchCountNum) {
-          console.log(`[Historical Append] Waiting 2 seconds before next batch...`);
+          console.log(`[Historical Candles] Waiting 2 seconds before next batch...`);
           await new Promise(r => setTimeout(r, 2000));
         }
       }
 
-      if (allHistorical.length === 0) {
+      if (allHistoricalCandles.length === 0) {
         clearInMemoryLock(normalizedAddress);
         res.status(200).json({
           status: "success",
@@ -200,43 +217,47 @@ export async function appendHistoricalData(
           poolId: poolIdToUse,
           chain: "katana",
           stats: {
-            existingSwaps: existingCount,
-            historicalSwapsAdded: 0,
-            totalSwaps: existingCount,
+            existingCandles: 0,
+            historicalCandlesAdded: 0,
+            totalCandles: 0,
             batchesProcessed: 0,
           },
         });
         return;
       }
 
-      console.log(`[Historical Append] Total historical swaps fetched: ${allHistorical.length}`);
+      console.log(`[Historical Candles] Total historical candles generated: ${allHistoricalCandles.length}`);
 
-      // Insert into MySQL
-      const rows = convertToModelFormat(allHistorical, existingSwapForPoolInfo, normalizedAddress);
-      const insertResult = await bulkInsertSwaps(rows);
+      // Insert candles into MySQL
+      const candlesForDB = convertCandlesToModelFormat(
+        allHistoricalCandles,
+        existingSwapForPoolInfo,
+        normalizedAddress
+      );
+      
+      const insertResult = await bulkInsertCandles(candlesForDB);
 
       if (!insertResult.success) {
-        throw new Error(`Failed to insert swaps: ${insertResult.error}`);
+        throw new Error(`Failed to insert candles: ${insertResult.error}`);
       }
 
-      console.log(`[Historical Append] Successfully inserted ${rows.length} swaps`);
+      console.log(`[Historical Candles] Successfully inserted ${candlesForDB.length} candles`);
 
       // Get final stats
-      const finalStats = await getMySQLSwapStats(normalizedAddress, poolIdToUse.toLowerCase());
+      const finalStats = await getCandleStats(normalizedAddress, poolIdToUse.toLowerCase(), '5m');
 
       clearInMemoryLock(normalizedAddress);
 
       res.status(200).json({
         status: "success",
-        msg: "Historical data appended successfully",
+        msg: "Historical candle data appended successfully",
         tokenAddress: normalizedAddress,
         poolId: poolIdToUse.toLowerCase(),
         chain: "katana",
-        dataSource: existingCount > 0 ? 'MySQL' : 'Redis-initiated',
+        timeframe: '5m',
         stats: {
-          existingSwaps: existingCount,
-          historicalSwapsAdded: allHistorical.length,
-          totalSwaps: finalStats.count,
+          historicalCandlesAdded: allHistoricalCandles.length,
+          totalCandles: finalStats.count,
           batchesProcessed: batchCountNum,
         },
         dataRange: {
@@ -256,10 +277,10 @@ export async function appendHistoricalData(
     } catch (apiError: any) {
       clearInMemoryLock(normalizedAddress);
 
-      console.error(`[Historical Append] API error:`, apiError.message);
+      console.error(`[Historical Candles] API error:`, apiError.message);
       res.status(500).json({
         status: "error",
-        msg: "Failed to append historical swap data",
+        msg: "Failed to append historical candle data",
         debug: { error: apiError.message },
       });
     }
@@ -269,7 +290,7 @@ export async function appendHistoricalData(
       clearInMemoryLock(req.query.tokenAddress.toLowerCase());
     }
 
-    console.error("[Historical Append] Controller error:", error);
+    console.error("[Historical Candles] Controller error:", error);
     res.status(500).json({
       status: "error",
       msg: "Unexpected server error",
