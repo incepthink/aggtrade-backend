@@ -3,6 +3,7 @@ import type { Request, Response, NextFunction } from "express";
 import {
   // Constants
   FULL_DATA_DAYS,
+  PROACTIVE_TOKENS,
   
   // Types
   Pool,
@@ -82,6 +83,102 @@ export async function getKatanaSwapData(
       });
       return;
     }
+
+    // check if token is proactive
+    const isProactiveToken = PROACTIVE_TOKENS.includes(normalizedAddress);
+
+    // Return cached data immediately for proactive tokens
+    if (isProactiveToken) {
+  // Proactive tokens are updated by cron job only
+  console.log(`[Katana Candles] Proactive token, skipping user-triggered update`);
+  
+  // Just load and return cached data without updating
+  const storedData = await loadCandleDataFromRedis(normalizedAddress, '5m');
+  
+  if (!storedData) {
+    res.status(503).json({
+      status: "error",
+      msg: "Data not yet available for this proactive token. Cron job will update shortly.",
+      tokenAddress: normalizedAddress,
+    });
+    return;
+  }
+
+  // Load historical candles from MySQL and merge
+  const requestedStartTime = Math.floor(Date.now() / 1000) - (daysNum * 24 * 60 * 60);
+  
+  const selectedPool = {
+    id: storedData.metadata.pool.id,
+    token0: storedData.metadata.pool.token0,
+    token1: storedData.metadata.pool.token1,
+    feeTier: storedData.metadata.pool.feeTier,
+    totalValueLockedUSD: storedData.metadata.pool.totalValueLockedUSD.toString(),
+    volumeUSD: storedData.metadata.pool.volumeUSD.toString(),
+  };
+
+  const historicalCandles = await loadCandlesFromMySQL(
+    normalizedAddress,
+    selectedPool.id,
+    requestedStartTime,
+    '5m'
+  );
+
+  // Filter Redis candles to requested time range
+  const filteredRedisCandles = storedData.candles.filter(
+    candle => candle.timestamp >= requestedStartTime * 1000
+  );
+
+  // Merge Redis and MySQL candles
+  const combined5mCandles = mergeCandles(filteredRedisCandles, historicalCandles);
+
+  // Aggregate to requested timeframe if needed
+  let finalCandles: Candle[];
+  if (requestedTimeframe === '5m') {
+    finalCandles = combined5mCandles;
+  } else {
+    console.log(`[Katana Candles] Aggregating to ${requestedTimeframe}`);
+    finalCandles = aggregateCandlesToTimeframe(combined5mCandles, requestedTimeframe);
+  }
+
+  const isToken0 = storedData.metadata.isToken0;
+  
+  res.status(200).json({
+    status: "success",
+    data: {
+      candles: finalCandles,
+      metadata: {
+        token: storedData.metadata.token,
+        pool: storedData.metadata.pool,
+        poolToken0: selectedPool.token0,
+        poolToken1: selectedPool.token1,
+        isToken0,
+        totalCandles: finalCandles.length,
+        timeframe: requestedTimeframe,
+        timeRange: {
+          start: requestedStartTime * 1000,
+          end: Date.now(),
+          days: daysNum,
+        },
+      },
+    },
+    source: "katana-sushiswap-candles",
+    cached: true,
+    tokenAddress: normalizedAddress,
+    count: finalCandles.length,
+    poolId: selectedPool.id,
+    poolTVL: selectedPool.totalValueLockedUSD,
+    chain: "katana",
+    updateStatus: "proactive-cached",
+    isProactive: true,
+    dataSource: {
+      redis: filteredRedisCandles.length,
+      mysql: historicalCandles.length,
+      combined5m: combined5mCandles.length,
+      finalTimeframe: finalCandles.length,
+    },
+  });
+  return;
+}
 
     // Set update lock
     await setUpdateLock(normalizedAddress);

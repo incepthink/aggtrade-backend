@@ -17,6 +17,12 @@ export const RATE_LIMITER_CONFIG = {
   minTime: 1000,
 };
 
+// Tokens updated through cron job
+export const PROACTIVE_TOKENS = [
+  '0xee7d8bcfb72bc1880d0cf19822eb0a2e6577ab62', // WRON/ETH on Katana
+];
+
+
 /**
  * Cache Configuration
  */
