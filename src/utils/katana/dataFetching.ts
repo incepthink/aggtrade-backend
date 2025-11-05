@@ -14,6 +14,8 @@ import {
   getHistoricalSwapsQuery 
 } from './graphqlQueries';
 import type { SwapData, Pool, SushiGraphResponse } from './types';
+import { getPoolsWithMetricsQuery } from './graphqlQueries';
+import type { PoolWithMetrics } from './types';
 
 /**
  * Shared rate limiter instance for all subgraph requests
@@ -191,4 +193,25 @@ export async function fetchHistoricalSwaps(
 
   console.log(`[Fetch Historical] Fetch complete: ${allSwaps.length} total swaps`);
   return allSwaps;
+}
+
+/**
+ * Fetch all pools with metrics from subgraph
+ */
+export async function fetchPoolsWithMetrics(): Promise<PoolWithMetrics[]> {
+  const response = await sushiLimiter.schedule(() =>
+    axios.post<SushiGraphResponse>(KATANA_SUBGRAPH_URL, {
+      query: getPoolsWithMetricsQuery(),
+    })
+  );
+
+  if (response.data.errors) {
+    console.error("[Fetch Pools] GraphQL errors:", response.data.errors);
+    throw new Error(`GraphQL error: ${JSON.stringify(response.data.errors)}`);
+  }
+
+  const pools = response.data.data?.pools || [];
+  console.log(`[Fetch Pools] Found ${pools.length} pools with metrics`);
+  
+  return pools as PoolWithMetrics[]; // Add type assertion
 }

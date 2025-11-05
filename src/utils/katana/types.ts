@@ -145,7 +145,7 @@ export interface MySQLSwapResult {
 export interface SushiGraphResponse {
   data: {
     swaps?: SwapData[];
-    pools?: Pool[];
+    pools?: Pool[] | PoolWithMetrics[]; // Support both Pool and PoolWithMetrics
   };
   errors?: any[];
 }
@@ -156,4 +156,73 @@ export interface SushiGraphResponse {
 export interface TokenPrices {
   token0Price: number;
   token1Price: number;
+}
+
+/**
+ * Pool day data from subgraph
+ */
+export interface PoolDayData {
+  date: number;
+  volumeUSD: string;
+  tvlUSD: string;
+  txCount: string;
+}
+
+/**
+ * Raw pool data from subgraph with metrics
+ */
+export interface PoolWithMetrics {
+  id: string;
+  token0: {
+    id: string;
+    symbol: string;
+    name: string;
+    decimals: string;
+  };
+  token1: {
+    id: string;
+    symbol: string;
+    name: string;
+    decimals: string;
+  };
+  feeTier: string;
+  liquidity: string;
+  totalValueLockedUSD: string;
+  volumeUSD: string;
+  txCount: string;
+  poolDayData: PoolDayData[];
+}
+
+/**
+ * Processed pool data for frontend
+ */
+export interface ProcessedPool {
+  id: string;
+  address: string;
+  name: string;
+  token0Address: string;
+  token1Address: string;
+  token0Symbol: string;
+  token1Symbol: string;
+  token0Name: string;
+  token1Name: string;
+  token0LogoUri: string | null;
+  token1LogoUri: string | null;
+  swapFee: number;
+  protocol: 'SUSHISWAP_V3';
+  chainId: number;
+  
+  // Current metrics
+  liquidityUSD: number;
+  volumeUSD1d: number;
+  volumeUSD1w: number;
+  txCount1d: number;
+  
+  // Changes (percentage)
+  liquidityUSDChange1d: number;
+  volumeUSDChange1d: number;
+  volumeUSDChange1w: number;
+  
+  // APR (calculated from fees)
+  totalApr1d: number;
 }

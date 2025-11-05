@@ -104,3 +104,43 @@ export function getPoolInfoQuery(): string {
     }
   `;
 }
+
+/**
+ * Get all pools with their 24h and 7d data
+ */
+export function getPoolsWithMetricsQuery(): string {
+  return `
+    query GetPoolsWithMetrics {
+      pools(
+        orderBy: totalValueLockedUSD
+        orderDirection: desc
+        first: 1000
+      ) {
+        id
+        token0 {
+          id
+          symbol
+          name
+          decimals
+        }
+        token1 {
+          id
+          symbol
+          name
+          decimals
+        }
+        feeTier
+        liquidity
+        totalValueLockedUSD
+        volumeUSD
+        txCount
+        poolDayData(first: 7, orderBy: date, orderDirection: desc) {
+          date
+          volumeUSD
+          tvlUSD
+          txCount
+        }
+      }
+    }
+  `;
+}

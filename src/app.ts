@@ -8,6 +8,7 @@ import {
   rateLimit,
   swap,
 } from "./controllers/controllers";
+import initializeRoutes from "./routes";
 
 export function createApp(): express.Express {
   const app = express();
@@ -35,6 +36,8 @@ export function createApp(): express.Express {
   app.get("/proxy/1inch/approve/transaction", rateLimit, approveTransaction);
   app.get("/proxy/1inch/swap", rateLimit, swap);
   app.get("/proxy/1inch/quote", rateLimit, getQuote);
+
+  initializeRoutes(app)
 
   app.use("/api", router);
 
