@@ -5,9 +5,37 @@ import calculateCumulatedValue from "../../cron-jobs/utils/yearnfiBalance";
 import BalanceHistory from "../../models/BalanceHistory";
 import { getKatanaBalance, updateTokenAddressesForUser } from "../katanaRoutes";
 
+// Retry utility with exponential backoff
+const retryWithBackoff = async <T>(
+  fn: () => Promise<T>,
+  maxRetries = 3,
+  baseDelay = 1000
+): Promise<T> => {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (attempt === maxRetries - 1) throw error;
+      
+      const delay = baseDelay * Math.pow(2, attempt);
+      console.log(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  throw new Error("Max retries exceeded");
+};
+
 const updateBalanceHistory = async (address: string) => {
   try {
     const chainId = 747474;
+
+    // Check if balance update is needed (minute-level check)
+    const needsUpdate = await User.needsBalanceUpdate(address, chainId);
+    
+    if (!needsUpdate) {
+      console.log(`[Update Balance History] Skipping - already updated this minute for ${address}`);
+      return null;
+    }
 
     // Find or create user
     const { user } = await User.findOrCreateUser(address, chainId);
@@ -17,12 +45,33 @@ const updateBalanceHistory = async (address: string) => {
       await user.update({ is_active: true });
     }
 
-    // Fetch current balance data in parallel
+    // Fetch current balance data in parallel with retry logic
     const [etherBalUSD, yearnfiBalUSD, erc20BalanceUSD] = await Promise.all([
-      getEtherBalanceUSD(address),
-      calculateCumulatedValue(address),
-      getErc20BalanceUSD(address)
+      retryWithBackoff(() => getEtherBalanceUSD(address)),
+      retryWithBackoff(() => calculateCumulatedValue(address)),
+      retryWithBackoff(() => getErc20BalanceUSD(address))
     ]);
+
+    // Validate all balances are valid numbers
+    const isEtherValid = Number.isFinite(etherBalUSD);
+    const isYearnfiValid = Number.isFinite(yearnfiBalUSD);
+    const isErc20Valid = Number.isFinite(erc20BalanceUSD);
+
+    // Check if all balances are valid
+    if (!isEtherValid || !isYearnfiValid || !isErc20Valid) {
+      const invalidBalances = [];
+      if (!isEtherValid) invalidBalances.push(`etherBalUSD: ${etherBalUSD}`);
+      if (!isYearnfiValid) invalidBalances.push(`yearnfiBalUSD: ${yearnfiBalUSD}`);
+      if (!isErc20Valid) invalidBalances.push(`erc20BalanceUSD: ${erc20BalanceUSD}`);
+      
+      console.error(
+        `[Update Balance History] Incomplete balance data for ${address}. Invalid values: ${invalidBalances.join(', ')}`
+      );
+      
+      throw new Error(
+        `Cannot store incomplete balance. Invalid values: ${invalidBalances.join(', ')}`
+      );
+    }
 
     const totalBalanceUSD = etherBalUSD + yearnfiBalUSD + erc20BalanceUSD;
 
@@ -66,18 +115,29 @@ export const storeUserForEquityTracking = async (
 
     const data = await getKatanaBalance(walletAddress);
     
-        // Update user token addresses
-       await updateTokenAddressesForUser(walletAddress, data);
+    // Update user token addresses
+    await updateTokenAddressesForUser(walletAddress, data);
 
     // Update balance history
-    const { userId, etherBalUSD, yearnfiBalUSD, totalBalanceUSD } = 
-      await updateBalanceHistory(walletAddress);
+    const balanceResult = await updateBalanceHistory(walletAddress);
 
-    // Return response
-    res.status(200).json({
-      status: "success",
-      msg: created ? "User registered for equity tracking" : "User data updated",
-      data: {
+    // If balance was skipped (already updated this minute), fetch the last recorded balance
+    let responseData;
+    if (!balanceResult) {
+      const lastBalance = await BalanceHistory.getUserHistory(user.id, undefined, undefined, 1);
+      const lastBalanceUSD = lastBalance.length > 0 ? parseFloat(lastBalance[0].balance_usd) : 0;
+      
+      responseData = {
+        userId: user.id,
+        walletAddress: user.wallet_address,
+        chainId: user.chain_id,
+        totalBalanceUSD: lastBalanceUSD.toFixed(2),
+        isNewUser: created,
+        cached: true // Indicate this is cached data
+      };
+    } else {
+      const { userId, etherBalUSD, yearnfiBalUSD, totalBalanceUSD } = balanceResult;
+      responseData = {
         userId,
         walletAddress: user.wallet_address,
         chainId: user.chain_id,
@@ -85,7 +145,15 @@ export const storeUserForEquityTracking = async (
         yearnfiBalanceUSD: yearnfiBalUSD.toFixed(2),
         totalBalanceUSD: totalBalanceUSD.toFixed(2),
         isNewUser: created,
-      },
+        cached: false
+      };
+    }
+
+    // Return response
+    res.status(200).json({
+      status: "success",
+      msg: created ? "User registered for equity tracking" : "User data updated",
+      data: responseData,
     });
   } catch (error: any) {
     console.error("[Store User for Equity Tracking] Error:", error);
@@ -122,9 +190,8 @@ export const getEquityTrendForUser = async (
     
     if (user?.token_addresses === null) {
       const data = await getKatanaBalance(userAddress);
-    
-        // Update user token addresses
-       await updateTokenAddressesForUser(userAddress, data);
+      // Update user token addresses
+      await updateTokenAddressesForUser(userAddress, data);
     }
 
     if (!user) {
@@ -134,9 +201,7 @@ export const getEquityTrendForUser = async (
       });
     }
 
-    await updateBalanceHistory(userAddress);
-
-    // Step 2: Get balance history for the user
+    // Step 2: Get balance history for the user (current data)
     const balanceHistory = await BalanceHistory.getUserHistory(
       user.id,
       undefined, // startDate - get all history
@@ -152,7 +217,7 @@ export const getEquityTrendForUser = async (
       date: new Date(record.timestamp).toLocaleString(),
     }));
 
-    // Step 4: Return response
+    // Step 4: Return response immediately
     res.status(200).json({
       status: "success",
       msg: "Equity trend data retrieved successfully",
@@ -163,6 +228,13 @@ export const getEquityTrendForUser = async (
         history: chartData,
       },
     });
+
+    // Step 5: Update balance history in the background (only if needed)
+    updateBalanceHistory(userAddress).catch(error => {
+      console.error("[Background Balance Update] Error:", error);
+      // Log but don't throw - this is a background task
+    });
+
   } catch (error: any) {
     console.error("[Get Equity Trend] Error:", error);
 

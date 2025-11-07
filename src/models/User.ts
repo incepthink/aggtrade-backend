@@ -71,6 +71,42 @@ class User
     return { user, created }
   }
 
+  // Static method to check if balance needs update (checks minute-level precision)
+  static async needsBalanceUpdate(walletAddress: string, chainId: number = 747474): Promise<boolean> {
+    const user = await this.findByWallet(walletAddress, chainId)
+    
+    if (!user || !user.last_balance_check) {
+      return true // No previous check, needs update
+    }
+
+    // Get current time truncated to minute
+    const now = new Date()
+    const currentMinute = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+      now.getHours(),
+      now.getMinutes(),
+      0,
+      0
+    )
+
+    // Get last check time truncated to minute
+    const lastCheck = new Date(user.last_balance_check)
+    const lastCheckMinute = new Date(
+      lastCheck.getFullYear(),
+      lastCheck.getMonth(),
+      lastCheck.getDate(),
+      lastCheck.getHours(),
+      lastCheck.getMinutes(),
+      0,
+      0
+    )
+
+    // Return true if we're in a different minute
+    return currentMinute.getTime() !== lastCheckMinute.getTime()
+  }
+
   // Static method to update last balance check time
   static async updateLastCheck(walletAddress: string, chainId: number = 747474) {
     return this.update(
