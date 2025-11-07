@@ -184,7 +184,7 @@ export async function getKatanaBalanceRoute(
   _next: NextFunction
 ) {
   try {
-    const { address } = req.query;
+    const { userAddress: address } = req.params;
 
     if (!address || typeof address !== 'string') {
       return res.status(400).json({ status: "error", message: "provide valid address" });
