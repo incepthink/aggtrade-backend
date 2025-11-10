@@ -5,12 +5,15 @@ import type {
   NormalizedPool,
   ChainConfig,
 } from "../types/sushiswap";
-import { getPoolsQuery, getSwapsQuery } from "../queries/sushiswap";
+import { getPoolsQuery, getSwapsQuery, getUserTVLSimplifiedV3 } from "../queries/sushiswap";
 import {
   normalizePool,
   getQueryVariables,
   formatTokenAddress,
 } from "../utils/sushiswap";
+
+export const KATANA_SUBGRAPH_URL = 
+  "https://api.studio.thegraph.com/query/106601/sushi-v-3-katana-2/version/latest";
 
 /**
  * Fetch pools/pairs by TVL for a specific token (version-agnostic).
@@ -141,4 +144,34 @@ export async function fetchSwapsWithConfig(
     String(config.chain),
     config.version as "v2" | "v3"
   );
+}
+
+interface Position {
+  id: string;
+  liquidity: string;
+  amountDepositedUSD: string;
+  amountWithdrawnUSD: string;
+  pool: {
+    id: string;
+    token0: {
+      symbol: string;
+    };
+    token1: {
+      symbol: string;
+    };
+  };
+}
+
+export async function getUserPositionsByAddress(address:string) {
+  const query = getUserTVLSimplifiedV3()
+  const variables = { userAddress: address };
+
+  const res = await axios.post<any>(
+    KATANA_SUBGRAPH_URL,
+    { query, variables },
+    { timeout: 15_000, headers: { "Content-Type": "application/json" } }
+  );
+
+  const postions: Position[] = res.data.data.positions
+  return postions
 }

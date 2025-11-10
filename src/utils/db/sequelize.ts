@@ -1,6 +1,6 @@
 import { Sequelize, Dialect, Options } from 'sequelize'
 
-import config from '../../config/dbConfig.json'
+import config from '../../config/config.json'
 
 const env = process.env.NODE_ENV || 'development'
 const configForEnv = config[env as keyof typeof config]

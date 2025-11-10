@@ -176,3 +176,30 @@ export function getPoolsQuery(version: 'v2' | 'v3'): string {
 export function getSwapsQuery(version: 'v2' | 'v3'): string {
   return version === 'v3' ? getSwapsQueryV3() : getSwapsQueryV2();
 }
+
+export function getUserTVLSimplifiedV3(): string {
+  return `
+    query GetUserTVLSimplified($userAddress: Bytes!) {
+      positions(
+        where: {
+          owner: $userAddress,
+          liquidity_gt: "0"
+        }
+      ) {
+        id
+        liquidity
+        amountDepositedUSD
+        amountWithdrawnUSD
+        pool {
+          id
+          token0 {
+            symbol
+          }
+          token1 {
+            symbol
+          }
+        }
+      }
+    }
+  `;
+}

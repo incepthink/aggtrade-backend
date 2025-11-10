@@ -6,6 +6,7 @@ import {
   CreationOptional
 } from 'sequelize'
 import sequelize from '../utils/db/sequelize'
+import ReferralCode from './ReferralCode'
 
 export interface UserAttributes {
   id: number
@@ -288,5 +289,13 @@ User.init(
     ]
   }
 )
+
+User.addHook('afterCreate', async (user: User) => {
+  const code = await ReferralCode.generateUniqueCode()
+  await ReferralCode.create({
+    user_id: user.id,
+    code
+  })
+})
 
 export default User
