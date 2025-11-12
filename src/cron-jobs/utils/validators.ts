@@ -34,7 +34,8 @@ export async function retryWithBackoff<T>(
 
 /**
  * Safely converts a string to BigInt
- * @param value - The string value to convert
+ * Accepts both decimal strings (e.g., "12345") and hex strings (e.g., "0x1a2b3c")
+ * @param value - The string value to convert (decimal or hex)
  * @returns BigInt if valid, null if invalid
  */
 export function safeStringToBigInt(value: string | null | undefined): bigint | null {
@@ -45,8 +46,10 @@ export function safeStringToBigInt(value: string | null | undefined): bigint | n
   // Remove any whitespace
   const trimmed = value.trim();
 
-  // Check if it's a valid numeric string
-  if (!/^\d+$/.test(trimmed)) {
+  // Accept both decimal strings and hex strings (with 0x prefix)
+  // Decimal: "12345"
+  // Hex: "0x1a2b3c" or "0xABCDEF"
+  if (!/^(0x[\da-fA-F]+|\d+)$/.test(trimmed)) {
     console.warn(`[Validator] Invalid BigInt string: "${value}"`);
     return null;
   }

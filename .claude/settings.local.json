@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(node -e:*)",
+      "Bash(npm run build:*)",
+      "Bash(echo:*)"
     ],
     "deny": [],
     "ask": []

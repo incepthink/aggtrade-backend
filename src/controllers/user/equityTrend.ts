@@ -45,35 +45,49 @@ const updateBalanceHistory = async (address: string) => {
       await user.update({ is_active: true });
     }
 
-    // Fetch current balance data in parallel with retry logic
+    // Fetch current balance data in parallel with retry logic (functions now return null on failure)
     const [etherBalUSD, yearnfiBalUSD, erc20BalanceUSD] = await Promise.all([
-      retryWithBackoff(() => getEtherBalanceUSD(address)),
-      retryWithBackoff(() => calculateCumulatedValue(address)),
-      retryWithBackoff(() => getErc20BalanceUSD(address))
+      retryWithBackoff(() => getEtherBalanceUSD(address)).catch(() => null),
+      retryWithBackoff(() => calculateCumulatedValue(address)).catch(() => null),
+      retryWithBackoff(() => getErc20BalanceUSD(address)).catch(() => null)
     ]);
 
-    // Validate all balances are valid numbers
-    const isEtherValid = Number.isFinite(etherBalUSD);
-    const isYearnfiValid = Number.isFinite(yearnfiBalUSD);
-    const isErc20Valid = Number.isFinite(erc20BalanceUSD);
+    // Validate all balances - handle null and NaN
+    const isEtherValid = etherBalUSD !== null && Number.isFinite(etherBalUSD);
+    const isYearnfiValid = yearnfiBalUSD !== null && Number.isFinite(yearnfiBalUSD);
+    const isErc20Valid = erc20BalanceUSD !== null && Number.isFinite(erc20BalanceUSD);
 
-    // Check if all balances are valid
-    if (!isEtherValid || !isYearnfiValid || !isErc20Valid) {
+    // Count valid balances
+    const validBalancesCount = [isEtherValid, isYearnfiValid, isErc20Valid].filter(Boolean).length;
+
+    // If ALL balances are invalid, throw error
+    if (validBalancesCount === 0) {
+      console.error(
+        `[Update Balance History] All balance components failed for ${address}`
+      );
+
+      throw new Error(
+        `Cannot store balance - all balance components failed`
+      );
+    }
+
+    // If some balances are invalid, log warning but continue with partial data
+    if (validBalancesCount < 3) {
       const invalidBalances = [];
       if (!isEtherValid) invalidBalances.push(`etherBalUSD: ${etherBalUSD}`);
       if (!isYearnfiValid) invalidBalances.push(`yearnfiBalUSD: ${yearnfiBalUSD}`);
       if (!isErc20Valid) invalidBalances.push(`erc20BalanceUSD: ${erc20BalanceUSD}`);
-      
-      console.error(
-        `[Update Balance History] Incomplete balance data for ${address}. Invalid values: ${invalidBalances.join(', ')}`
-      );
-      
-      throw new Error(
-        `Cannot store incomplete balance. Invalid values: ${invalidBalances.join(', ')}`
+
+      console.warn(
+        `[Update Balance History] Partial balance data for ${address}. Invalid values: ${invalidBalances.join(', ')}`
       );
     }
 
-    const totalBalanceUSD = etherBalUSD + yearnfiBalUSD + erc20BalanceUSD;
+    // Calculate total balance using only valid components (treat invalid as 0)
+    const totalBalanceUSD =
+      (isEtherValid ? etherBalUSD : 0) +
+      (isYearnfiValid ? yearnfiBalUSD : 0) +
+      (isErc20Valid ? erc20BalanceUSD : 0);
 
     // Store balance snapshot and update check time in parallel
     await Promise.all([
@@ -141,8 +155,8 @@ export const storeUserForEquityTracking = async (
         userId,
         walletAddress: user.wallet_address,
         chainId: user.chain_id,
-        etherBalanceUSD: etherBalUSD.toFixed(2),
-        yearnfiBalanceUSD: yearnfiBalUSD.toFixed(2),
+        etherBalanceUSD: etherBalUSD !== null ? etherBalUSD.toFixed(2) : 'N/A',
+        yearnfiBalanceUSD: yearnfiBalUSD !== null ? yearnfiBalUSD.toFixed(2) : 'N/A',
         totalBalanceUSD: totalBalanceUSD.toFixed(2),
         isNewUser: created,
         cached: false

@@ -190,7 +190,10 @@ async function multicall(calls: any[]): Promise<any[]> {
 function decodeUint(hex: string): bigint {
   const bigIntValue = safeStringToBigInt(hex);
   if (bigIntValue === null) {
-    console.warn(`[decodeUint] Invalid hex value: "${hex}", returning 0`);
+    // Only log warning for truly invalid data, not empty/null values
+    if (hex && hex !== '0x' && hex !== '0x0') {
+      console.warn(`[decodeUint] Invalid hex value: "${hex}", returning 0`);
+    }
     return BigInt(0);
   }
   return bigIntValue;
