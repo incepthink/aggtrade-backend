@@ -4,70 +4,78 @@ import getEtherBalanceUSD, { getErc20BalanceUSD } from "./utils/etherBalance";
 import calculateCumulatedValue from "./utils/yearnfiBalance";
 import User from "../models/User";
 import BalanceHistory from "../models/BalanceHistory";
-
-// Retry utility with exponential backoff
-const retryWithBackoff = async <T>(
-  fn: () => Promise<T>,
-  maxRetries = 3,
-  baseDelay = 1000
-): Promise<T> => {
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      if (attempt === maxRetries - 1) throw error;
-      
-      const delay = baseDelay * Math.pow(2, attempt);
-      console.log(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-  throw new Error("Max retries exceeded");
-};
+import { KatanaLogger, generateCorrelationId } from "../utils/logger";
 
 // Function to update balance for a single user
 async function updateUserBalance(userId: number, walletAddress: string) {
+  // Generate correlation ID for tracking this user's processing
+  const correlationId = generateCorrelationId();
+  const prefix = `[EquityTrend:${correlationId}]`;
+
   try {
-    console.log(`[Balance Update] Processing user: ${walletAddress}`);
+    KatanaLogger.info(prefix, "Processing user balance", {
+      userId,
+      walletAddress: walletAddress.substring(0, 10) + "...",
+      correlationId
+    });
 
     // Check if balance update is needed (minute-level check)
     const needsUpdate = await User.needsBalanceUpdate(walletAddress, 747474);
-    
+
     if (!needsUpdate) {
-      console.log(`[Balance Update] Skipping ${walletAddress} - already updated this minute`);
+      KatanaLogger.info(prefix, "User already updated, skipping", {
+        walletAddress: walletAddress.substring(0, 10) + "...",
+        correlationId
+      });
       return { success: true, walletAddress, skipped: true };
     }
 
-    // Fetch ETH balance and Yearn vaults balance in parallel with retry logic
+    // Fetch ETH balance, Yearn vaults balance, and ERC20 balance in parallel
+    // Each function has built-in retry logic at the API call level
     const [etherBalUSD, yearnfiBalUSD, erc20BalanceUSD] = await Promise.all([
-      retryWithBackoff(() => getEtherBalanceUSD(walletAddress)),
-      retryWithBackoff(() => calculateCumulatedValue(walletAddress)),
-      retryWithBackoff(() => getErc20BalanceUSD(walletAddress))
+      getEtherBalanceUSD(walletAddress).catch(() => null),
+      calculateCumulatedValue(walletAddress).catch(() => null),
+      getErc20BalanceUSD(walletAddress).catch(() => null)
     ]);
 
-    // Validate all balances are valid numbers
-    const isEtherValid = Number.isFinite(etherBalUSD);
-    const isYearnfiValid = Number.isFinite(yearnfiBalUSD);
-    const isErc20Valid = Number.isFinite(erc20BalanceUSD);
+    // Validate all balances - handle null and NaN
+    const isEtherValid = etherBalUSD !== null && Number.isFinite(etherBalUSD);
+    const isYearnfiValid = yearnfiBalUSD !== null && Number.isFinite(yearnfiBalUSD);
+    const isErc20Valid = erc20BalanceUSD !== null && Number.isFinite(erc20BalanceUSD);
 
-    // Check if all balances are valid
-    if (!isEtherValid || !isYearnfiValid || !isErc20Valid) {
-      const invalidBalances = [];
-      if (!isEtherValid) invalidBalances.push(`etherBalUSD: ${etherBalUSD}`);
-      if (!isYearnfiValid) invalidBalances.push(`yearnfiBalUSD: ${yearnfiBalUSD}`);
-      if (!isErc20Valid) invalidBalances.push(`erc20BalanceUSD: ${erc20BalanceUSD}`);
-      
-      console.error(
-        `[Balance Update] Incomplete balance data for ${walletAddress}. Invalid values: ${invalidBalances.join(', ')}`
-      );
-      
-      throw new Error(
-        `Cannot store incomplete balance. Invalid values: ${invalidBalances.join(', ')}`
-      );
+    // Count valid balances
+    const validBalancesCount = [isEtherValid, isYearnfiValid, isErc20Valid].filter(Boolean).length;
+
+    // If ALL balances are invalid, throw error
+    if (validBalancesCount === 0) {
+      KatanaLogger.error(prefix, "All balance components failed", undefined, {
+        walletAddress: walletAddress.substring(0, 10) + "...",
+        ethValid: isEtherValid,
+        yearnValid: isYearnfiValid,
+        erc20Valid: isErc20Valid,
+        correlationId
+      });
+
+      throw new Error("All balance components failed");
     }
 
-    // Calculate total balance
-    const totalBalanceUSD = etherBalUSD + yearnfiBalUSD + erc20BalanceUSD;
+    // If some balances are invalid, log warning but continue with partial data
+    if (validBalancesCount < 3) {
+      KatanaLogger.warn(prefix, "Partial balance data, some components failed", {
+        walletAddress: walletAddress.substring(0, 10) + "...",
+        validCount: validBalancesCount,
+        ethValid: isEtherValid,
+        yearnValid: isYearnfiValid,
+        erc20Valid: isErc20Valid,
+        correlationId
+      });
+    }
+
+    // Calculate total balance using only valid components (treat invalid as 0)
+    const totalBalanceUSD =
+      (isEtherValid ? etherBalUSD : 0) +
+      (isYearnfiValid ? yearnfiBalUSD : 0) +
+      (isErc20Valid ? erc20BalanceUSD : 0);
 
     // Store balance in history and update last check time in parallel
     await Promise.all([
@@ -75,45 +83,63 @@ async function updateUserBalance(userId: number, walletAddress: string) {
       User.updateLastCheck(walletAddress, 747474)
     ]);
 
-    console.log(
-      `[Balance Update] Success for ${walletAddress}: $${totalBalanceUSD.toFixed(2)} (ETH: $${etherBalUSD.toFixed(2)}, Yearnfi: $${yearnfiBalUSD.toFixed(2)}, ERC20: $${erc20BalanceUSD.toFixed(2)})`
-    );
+    // Log success with balance breakdown
+    KatanaLogger.info(prefix, "User balance updated successfully", {
+      walletAddress: walletAddress.substring(0, 10) + "...",
+      totalUSD: totalBalanceUSD.toFixed(2),
+      ethUSD: isEtherValid ? etherBalUSD?.toFixed(2) : 'N/A',
+      yearnUSD: isYearnfiValid ? yearnfiBalUSD?.toFixed(2) : 'N/A',
+      erc20USD: isErc20Valid ? erc20BalanceUSD?.toFixed(2) : 'N/A',
+      correlationId
+    });
 
     return { success: true, walletAddress, balance: totalBalanceUSD, skipped: false };
   } catch (error: any) {
-    console.error(
-      `[Balance Update] Error for ${walletAddress}:`,
-      error?.message
-    );
+    KatanaLogger.error(prefix, "Failed to update user balance", error, {
+      walletAddress: walletAddress.substring(0, 10) + "...",
+      correlationId
+    });
     return { success: false, walletAddress, error: error?.message };
   }
 }
 
 // Main cron job function
 async function runEquityTrendUpdate() {
-  console.log("\n===========================================");
-  console.log(`[Cron Job] Starting equity trend update at ${new Date().toISOString()}`);
-  console.log("===========================================\n");
+  const startTime = Date.now();
+  const prefix = "[EquityTrendCron]";
+
+  KatanaLogger.info(prefix, "Starting equity trend update", {
+    timestamp: new Date().toISOString()
+  });
 
   try {
     // Get all active users from database
     const activeUsers = await User.getActiveUsers(747474);
 
     if (activeUsers.length === 0) {
-      console.log("[Cron Job] No active users to update");
+      KatanaLogger.info(prefix, "No active users to update");
       return;
     }
 
-    console.log(`[Cron Job] Found ${activeUsers.length} active users to update\n`);
+    KatanaLogger.info(prefix, "Retrieved active users", {
+      totalUsers: activeUsers.length
+    });
 
     // Process all users with rate limiting (batch of 5 at a time)
     const batchSize = 5;
     const results = [];
+    const totalBatches = Math.ceil(activeUsers.length / batchSize);
 
     for (let i = 0; i < activeUsers.length; i += batchSize) {
       const batch = activeUsers.slice(i, i + batchSize);
-      
-      console.log(`[Cron Job] Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(activeUsers.length / batchSize)}`);
+      const batchNum = Math.floor(i / batchSize) + 1;
+
+      // Only log progress every 3 batches to reduce log spam
+      if (batchNum % 3 === 1 || batchNum === totalBatches) {
+        KatanaLogger.progress(prefix, batchNum, totalBatches, {
+          batchNumber: batchNum
+        });
+      }
 
       const batchResults = await Promise.all(
         batch.map((user: any) =>
@@ -129,20 +155,38 @@ async function runEquityTrendUpdate() {
       }
     }
 
-    // Summary
+    // Calculate statistics
     const successful = results.filter((r) => r.success && !r.skipped).length;
     const skipped = results.filter((r) => r.success && r.skipped).length;
     const failed = results.filter((r) => !r.success).length;
+    const failedUsers = results.filter((r) => !r.success).map(r => r.walletAddress.substring(0, 10) + "...");
 
-    console.log("\n===========================================");
-    console.log(`[Cron Job] Completed equity trend update`);
-    console.log(`[Cron Job] Total users: ${activeUsers.length}`);
-    console.log(`[Cron Job] Successfully updated: ${successful}`);
-    console.log(`[Cron Job] Skipped (already updated): ${skipped}`);
-    console.log(`[Cron Job] Failed: ${failed}`);
-    console.log("===========================================\n");
+    // Performance logging
+    KatanaLogger.performance(prefix, "equity_trend_update", startTime, {
+      totalUsers: activeUsers.length,
+      successful,
+      skipped,
+      failed
+    });
+
+    // Log failed users if any
+    if (failed > 0) {
+      KatanaLogger.warn(prefix, "Some users failed to update", {
+        failedCount: failed,
+        failedUsers: failedUsers.slice(0, 10) // Only log first 10
+      });
+    }
+
+    KatanaLogger.info(prefix, "Equity trend update completed", {
+      totalUsers: activeUsers.length,
+      successful,
+      skipped,
+      failed,
+      successRate: `${((successful / activeUsers.length) * 100).toFixed(1)}%`
+    });
+
   } catch (error: any) {
-    console.error("[Cron Job] Fatal error:", error?.message);
+    KatanaLogger.error(prefix, "Fatal error in cron job", error);
   }
 }
 
@@ -152,13 +196,14 @@ cron.schedule("0 */4 * * *", async () => {
   await runEquityTrendUpdate();
 });
 
-// Run immediately on startup (optional - remove if you don't want this)
-// (async () => {
-//   console.log("[Cron Job] Starting equity trend tracker...");
-//   console.log("[Cron Job] Scheduled to run every 4 hours");
-//   console.log("[Cron Job] Running initial update now...\n");
-  
-//   await runEquityTrendUpdate();
-// })();
+// Run immediately on startup for testing
+(async () => {
+  const prefix = "[EquityTrendStartup]";
+  KatanaLogger.info(prefix, "Starting equity trend tracker");
+  KatanaLogger.info(prefix, "Scheduled to run every 4 hours");
+  KatanaLogger.info(prefix, "Running initial update now");
 
-console.log("[Cron Job] Equity trend tracker is running...");
+  await runEquityTrendUpdate();
+})();
+
+KatanaLogger.info("[EquityTrendCron]", "Equity trend tracker initialized and scheduled");

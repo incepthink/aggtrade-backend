@@ -2,6 +2,14 @@
 
 import axios from "axios";
 import User from "../../models/User";
+import {
+  safeStringToBigInt,
+  isValidNumber,
+  safeMultiply,
+  validateNumber,
+  extractPrice,
+  retryWithBackoff
+} from "./validators";
 
 const decimalsMap = new Map([
   ["0x7f1f4b4b29f5058fa32cc7a97141b8d7e5abdc2d", 18], // KAT
@@ -27,35 +35,74 @@ const decimalsMap = new Map([
   ["0x4772d2e014f9fc3a820c444e3313968e9a5c8121", 18], // yUSD
 ]);
 
-function weiToEth(wei: string): string {
-  const ethValue = BigInt(wei) / BigInt(10 ** 18);
-  const remainder = BigInt(wei) % BigInt(10 ** 18);
-  const decimals = remainder.toString().padStart(18, '0').slice(0, 6);
-  return `${ethValue}.${decimals}`;
+function weiToEth(wei: string): string | null {
+  const weiBigInt = safeStringToBigInt(wei);
+  if (weiBigInt === null) {
+    console.warn(`[weiToEth] Invalid wei value: "${wei}"`);
+    return null;
+  }
+
+  try {
+    const ethValue = weiBigInt / BigInt(10 ** 18);
+    const remainder = weiBigInt % BigInt(10 ** 18);
+    const decimals = remainder.toString().padStart(18, '0').slice(0, 6);
+    return `${ethValue}.${decimals}`;
+  } catch (error) {
+    console.error(`[weiToEth] Conversion error for wei: "${wei}"`, error);
+    return null;
+  }
 }
 
-async function getEtherPriceSushi(): Promise<number> {
+async function getEtherPriceSushi(): Promise<number | null> {
   const weth = "0xee7d8bcfb72bc1880d0cf19822eb0a2e6577ab62";
 
-  const { data } = await axios.get(
-    `https://api.sushi.com/price/v1/747474/${weth}`,
-    {
-      timeout: 5000,
-    }
+  // Wrap API call with retry logic
+  const result = await retryWithBackoff(
+    async () => {
+      const { data } = await axios.get(
+        `https://api.sushi.com/price/v1/747474/${weth}`,
+        {
+          timeout: 5000,
+        }
+      );
+
+      const price = extractPrice(data);
+      if (price === null) {
+        throw new Error('Invalid price data received');
+      }
+      return price;
+    },
+    3,
+    1000,
+    'Sushi ETH price'
   );
 
-  return data;
+  return result;
 }
 
-async function getPriceSushi(address: string): Promise<number> {
-  const { data } = await axios.get(
-    `https://api.sushi.com/price/v1/747474/${address}`,
-    {
-      timeout: 5000,
-    }
+async function getPriceSushi(address: string): Promise<number | null> {
+  // Wrap API call with retry logic
+  const result = await retryWithBackoff(
+    async () => {
+      const { data } = await axios.get(
+        `https://api.sushi.com/price/v1/747474/${address}`,
+        {
+          timeout: 5000,
+        }
+      );
+
+      const price = extractPrice(data);
+      if (price === null) {
+        throw new Error('Invalid price data received');
+      }
+      return price;
+    },
+    3,
+    1000,
+    `Sushi price for ${address.substring(0, 10)}...`
   );
 
-  return data;
+  return result;
 }
 
 export async function getErc20BalanceUSD(walletAddress: string): Promise<number> {
@@ -83,22 +130,56 @@ export async function getErc20BalanceUSD(walletAddress: string): Promise<number>
         // Get decimals for the token
         const decimals = decimalsMap.get(lowerCaseAddress) || 18;
 
-        // Fetch balance and price in parallel
-        const [balanceRes, price] = await Promise.all([
-          axios.get(
-            `https://api.etherscan.io/v2/api?chainid=747474&module=account&action=tokenbalance&contractaddress=${tokenAddress}&address=${walletAddress}&tag=latest&apikey=${process.env.ETHERSCAN_API}`,
-            { timeout: 5000 }
+        // Fetch balance with retry, and price in parallel
+        const [balanceWei, price] = await Promise.all([
+          retryWithBackoff(
+            async () => {
+              const res = await axios.get(
+                `https://api.etherscan.io/v2/api?chainid=747474&module=account&action=tokenbalance&contractaddress=${tokenAddress}&address=${walletAddress}&tag=latest&apikey=${process.env.ETHERSCAN_API}`,
+                { timeout: 5000 }
+              );
+
+              if (!res.data?.result) {
+                throw new Error('Invalid Etherscan response');
+              }
+
+              return res.data.result;
+            },
+            3,
+            1000,
+            `Token balance for ${tokenAddress.substring(0, 10)}...`
           ),
           getPriceSushi(tokenAddress)
         ]);
 
-        const balanceWei = balanceRes.data.result;
-        
+        // If balance fetch failed after retries, skip this token
+        if (balanceWei === null) {
+          console.warn(`[getErc20BalanceUSD] Failed to fetch balance for token ${tokenAddress}`);
+          return 0;
+        }
+
+        // Validate balance
+        const balanceNum = validateNumber(balanceWei, `balance for ${tokenAddress}`);
+        if (balanceNum === null) {
+          console.warn(`[getErc20BalanceUSD] Invalid balance for token ${tokenAddress}`);
+          return 0;
+        }
+
         // Convert to human readable format
-        const balance = Number(balanceWei) / Math.pow(10, decimals);
-        
-        // Calculate USD value
-        const usdValue = balance * price;
+        const balance = balanceNum / Math.pow(10, decimals);
+
+        // Validate price
+        if (price === null || !isValidNumber(price)) {
+          console.warn(`[getErc20BalanceUSD] Invalid price for token ${tokenAddress}, price: ${price}`);
+          return 0;
+        }
+
+        // Calculate USD value with safe multiplication
+        const usdValue = safeMultiply(balance, price);
+        if (usdValue === null) {
+          console.warn(`[getErc20BalanceUSD] Invalid USD calculation for token ${tokenAddress}`);
+          return 0;
+        }
 
         return usdValue;
       } catch (error) {
@@ -118,17 +199,62 @@ export async function getErc20BalanceUSD(walletAddress: string): Promise<number>
   }
 }
 
-async function getEtherBalanceUSD(walletAddress: string): Promise<number> {
-  const etherscanUrl = `https://api.etherscan.io/v2/api?chainid=747474&module=account&action=balance&address=${walletAddress}&tag=latest&apikey=${process.env.ETHERSCAN_API}`;
+async function getEtherBalanceUSD(walletAddress: string): Promise<number | null> {
+  try {
+    // Fetch ETH balance from Etherscan with retry
+    const etherBalWei = await retryWithBackoff(
+      async () => {
+        const etherscanUrl = `https://api.etherscan.io/v2/api?chainid=747474&module=account&action=balance&address=${walletAddress}&tag=latest&apikey=${process.env.ETHERSCAN_API}`;
+        const etherscanRes = await axios.get(etherscanUrl, { timeout: 5000 });
 
-  const etherscanRes = await axios.get(etherscanUrl);
-  const etherBalWei = etherscanRes.data.result;
-  const etherBal = weiToEth(etherBalWei);
-  
-  const etherPrice = await getEtherPriceSushi();
-  const etherBalUSD = Number(etherBal) * etherPrice;
+        if (!etherscanRes.data?.result) {
+          throw new Error('Invalid Etherscan response');
+        }
 
-  return etherBalUSD;
+        return etherscanRes.data.result;
+      },
+      3,
+      1000,
+      'Etherscan ETH balance'
+    );
+
+    if (etherBalWei === null) {
+      console.warn(`[getEtherBalanceUSD] Failed to fetch ETH balance for ${walletAddress}`);
+      return null;
+    }
+
+    // Validate and convert balance
+    const etherBal = weiToEth(etherBalWei);
+    if (etherBal === null) {
+      console.warn(`[getEtherBalanceUSD] Failed to convert ETH balance for ${walletAddress}`);
+      return null;
+    }
+
+    // Validate and get price (already has retry inside)
+    const etherPrice = await getEtherPriceSushi();
+    if (etherPrice === null) {
+      console.warn(`[getEtherBalanceUSD] Failed to get ETH price`);
+      return null;
+    }
+
+    // Safe multiplication
+    const etherBalNum = validateNumber(etherBal, 'etherBalance');
+    if (etherBalNum === null) {
+      console.warn(`[getEtherBalanceUSD] Invalid ETH balance number: ${etherBal}`);
+      return null;
+    }
+
+    const etherBalUSD = safeMultiply(etherBalNum, etherPrice);
+    if (etherBalUSD === null) {
+      console.warn(`[getEtherBalanceUSD] Failed to calculate USD value`);
+      return null;
+    }
+
+    return etherBalUSD;
+  } catch (error) {
+    console.error(`[getEtherBalanceUSD] Error fetching ETH balance for ${walletAddress}:`, error);
+    return null;
+  }
 }
 
 export default getEtherBalanceUSD;

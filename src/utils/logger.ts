@@ -1,11 +1,91 @@
 // utils/logger.ts
 export class KatanaLogger {
+  /**
+   * Sanitizes error objects to prevent massive stack trace dumps
+   */
+  private static sanitizeError(error: any): any {
+    if (!error) return null;
+
+    if (error instanceof Error) {
+      return {
+        message: error.message,
+        name: error.name,
+        code: (error as any).code || undefined,
+        status: (error as any).status || (error as any).statusCode || undefined,
+        // Only include first 3 lines of stack trace to prevent log spam
+        stack: error.stack?.split('\n').slice(0, 3).join(' | ')
+      };
+    }
+
+    if (typeof error === 'object') {
+      return {
+        message: error.message || String(error),
+        code: error.code,
+        status: error.status || error.statusCode
+      };
+    }
+
+    return String(error);
+  }
+
+  /**
+   * Sanitizes data to prevent dumping huge objects
+   */
+  private static sanitizeData(data: any, maxDepth: number = 2, currentDepth: number = 0): any {
+    if (data === null || data === undefined) return data;
+
+    // Prevent deep recursion
+    if (currentDepth >= maxDepth) return '[Object]';
+
+    // Handle primitives
+    if (typeof data !== 'object') {
+      const str = String(data);
+      // Truncate long strings
+      return str.length > 200 ? str.substring(0, 200) + '...' : str;
+    }
+
+    // Handle arrays
+    if (Array.isArray(data)) {
+      if (data.length > 5) {
+        return `[Array(${data.length})]`;
+      }
+      return data.map(item => this.sanitizeData(item, maxDepth, currentDepth + 1));
+    }
+
+    // Handle objects - limit fields
+    const sanitized: any = {};
+    let fieldCount = 0;
+    const maxFields = 10;
+
+    // Skip these noise fields that clutter logs
+    const skipFields = [
+      '_events', '_eventsCount', '_maxListeners', 'domain',
+      'socket', 'connection', 'agent', 'client', 'parser',
+      'res', 'req', 'request', 'response'
+    ];
+
+    for (const key in data) {
+      if (skipFields.includes(key)) continue;
+
+      if (fieldCount >= maxFields) {
+        sanitized['...more'] = `(${Object.keys(data).length - maxFields} fields hidden)`;
+        break;
+      }
+
+      sanitized[key] = this.sanitizeData(data[key], maxDepth, currentDepth + 1);
+      fieldCount++;
+    }
+
+    return sanitized;
+  }
+
   private static formatMessage(prefix: string, message: string, data?: any): string {
     const timestamp = new Date().toISOString();
     const baseMessage = `${timestamp} ${prefix} ${message}`;
-    
+
     if (data) {
-      return `${baseMessage} ${JSON.stringify(data)}`;
+      const sanitized = this.sanitizeData(data);
+      return `${baseMessage} ${JSON.stringify(sanitized)}`;
     }
     return baseMessage;
   }
@@ -20,11 +100,10 @@ export class KatanaLogger {
 
   static error(prefix: string, message: string, error?: any, data?: any): void {
     const errorInfo = error ? {
-      message: error.message,
-      stack: error.stack,
+      error: this.sanitizeError(error),
       ...data
     } : data;
-    
+
     console.error(this.formatMessage(prefix, message, errorInfo));
   }
 
@@ -83,4 +162,11 @@ export class KatanaLogger {
     };
     this.info(prefix, `API ${method}`, apiData);
   }
+}
+
+/**
+ * Generates a short correlation ID for tracking requests/operations
+ */
+export function generateCorrelationId(): string {
+  return Math.random().toString(36).substring(2, 10);
 }

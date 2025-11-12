@@ -1,6 +1,8 @@
 // Standalone file to calculate cumulated value for Katana (747474) vaults
 // No external imports - everything included
 
+import { safeStringToBigInt, isValidNumber, safeMultiply, validateNumber } from './validators';
+
 const KATANA_CHAIN_ID = 747474;
 const KATANA_RPC_URL = 'https://rpc.katana.network/';
 const MULTICALL3_ADDRESS = '0xcA11bde05977b3631167028862bE2a173976CA11';
@@ -186,7 +188,12 @@ async function multicall(calls: any[]): Promise<any[]> {
 }
 
 function decodeUint(hex: string): bigint {
-  return BigInt(hex);
+  const bigIntValue = safeStringToBigInt(hex);
+  if (bigIntValue === null) {
+    console.warn(`[decodeUint] Invalid hex value: "${hex}", returning 0`);
+    return BigInt(0);
+  }
+  return bigIntValue;
 }
 
 function decodeString(hex: string): string {
@@ -347,14 +354,31 @@ async function calculateCumulatedValue(walletAddress: string): Promise<number> {
   
   for (const vault of vaultsList) {
     const balance = balances[vault.address.toLowerCase()]?.balance?.normalized || 0;
-    const price = vault.tvl?.price || 0;
-    const vaultValue = balance * price;
-    total += vaultValue;
-    
+
+    // Validate price - don't use || 0 as NaN is truthy
+    const rawPrice = vault.tvl?.price;
+    const price = isValidNumber(rawPrice) ? rawPrice : 0;
+
+    if (price === 0 && rawPrice !== 0 && rawPrice !== null && rawPrice !== undefined) {
+      console.warn(`[calculateCumulatedValue] Invalid price for vault ${vault.address}: ${rawPrice}`);
+    }
+
+    // Safe multiplication
+    const vaultValue = safeMultiply(balance, price);
+    if (vaultValue !== null) {
+      total += vaultValue;
+    } else {
+      console.warn(`[calculateCumulatedValue] Invalid vault value calculation for ${vault.address}: balance=${balance}, price=${price}`);
+    }
+
     if (vault?.staking?.available && vault?.staking?.address) {
       const stakingBalance = balances[vault.staking.address.toLowerCase()]?.balance?.normalized || 0;
-      const stakingValue = stakingBalance * price;
-      total += stakingValue;
+      const stakingValue = safeMultiply(stakingBalance, price);
+      if (stakingValue !== null) {
+        total += stakingValue;
+      } else {
+        console.warn(`[calculateCumulatedValue] Invalid staking value calculation for ${vault.staking.address}: balance=${stakingBalance}, price=${price}`);
+      }
     }
   }
   
