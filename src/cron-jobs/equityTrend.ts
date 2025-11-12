@@ -43,39 +43,27 @@ async function updateUserBalance(userId: number, walletAddress: string) {
     const isYearnfiValid = yearnfiBalUSD !== null && Number.isFinite(yearnfiBalUSD);
     const isErc20Valid = erc20BalanceUSD !== null && Number.isFinite(erc20BalanceUSD);
 
-    // Count valid balances
-    const validBalancesCount = [isEtherValid, isYearnfiValid, isErc20Valid].filter(Boolean).length;
+    // Require ALL 3 components to be valid for chart consistency
+    if (!isEtherValid || !isYearnfiValid || !isErc20Valid) {
+      const invalidComponents = [];
+      if (!isEtherValid) invalidComponents.push('ETH');
+      if (!isYearnfiValid) invalidComponents.push('Yearn');
+      if (!isErc20Valid) invalidComponents.push('ERC20');
 
-    // If ALL balances are invalid, throw error
-    if (validBalancesCount === 0) {
-      KatanaLogger.error(prefix, "All balance components failed", undefined, {
+      KatanaLogger.error(prefix, "Incomplete balance data - skipping to maintain chart consistency", undefined, {
         walletAddress: walletAddress.substring(0, 10) + "...",
+        invalidComponents: invalidComponents.join(', '),
         ethValid: isEtherValid,
         yearnValid: isYearnfiValid,
         erc20Valid: isErc20Valid,
         correlationId
       });
 
-      throw new Error("All balance components failed");
+      throw new Error(`Incomplete balance data - missing: ${invalidComponents.join(', ')}`);
     }
 
-    // If some balances are invalid, log warning but continue with partial data
-    if (validBalancesCount < 3) {
-      KatanaLogger.warn(prefix, "Partial balance data, some components failed", {
-        walletAddress: walletAddress.substring(0, 10) + "...",
-        validCount: validBalancesCount,
-        ethValid: isEtherValid,
-        yearnValid: isYearnfiValid,
-        erc20Valid: isErc20Valid,
-        correlationId
-      });
-    }
-
-    // Calculate total balance using only valid components (treat invalid as 0)
-    const totalBalanceUSD =
-      (isEtherValid ? etherBalUSD : 0) +
-      (isYearnfiValid ? yearnfiBalUSD : 0) +
-      (isErc20Valid ? erc20BalanceUSD : 0);
+    // All components are valid - calculate total
+    const totalBalanceUSD = etherBalUSD + yearnfiBalUSD + erc20BalanceUSD;
 
     // Store balance in history and update last check time in parallel
     await Promise.all([
@@ -83,13 +71,13 @@ async function updateUserBalance(userId: number, walletAddress: string) {
       User.updateLastCheck(walletAddress, 747474)
     ]);
 
-    // Log success with balance breakdown
+    // Log success with balance breakdown (all components are valid at this point)
     KatanaLogger.info(prefix, "User balance updated successfully", {
       walletAddress: walletAddress.substring(0, 10) + "...",
       totalUSD: totalBalanceUSD.toFixed(2),
-      ethUSD: isEtherValid ? etherBalUSD?.toFixed(2) : 'N/A',
-      yearnUSD: isYearnfiValid ? yearnfiBalUSD?.toFixed(2) : 'N/A',
-      erc20USD: isErc20Valid ? erc20BalanceUSD?.toFixed(2) : 'N/A',
+      ethUSD: etherBalUSD.toFixed(2),
+      yearnUSD: yearnfiBalUSD.toFixed(2),
+      erc20USD: erc20BalanceUSD.toFixed(2),
       correlationId
     });
 
@@ -125,8 +113,8 @@ async function runEquityTrendUpdate() {
       totalUsers: activeUsers.length
     });
 
-    // Process all users with rate limiting (batch of 5 at a time)
-    const batchSize = 5;
+    // Process all users with rate limiting (batch of 2 at a time to respect Etherscan 5 calls/sec limit)
+    const batchSize = 2;
     const results = [];
     const totalBatches = Math.ceil(activeUsers.length / batchSize);
 
@@ -134,8 +122,8 @@ async function runEquityTrendUpdate() {
       const batch = activeUsers.slice(i, i + batchSize);
       const batchNum = Math.floor(i / batchSize) + 1;
 
-      // Only log progress every 3 batches to reduce log spam
-      if (batchNum % 3 === 1 || batchNum === totalBatches) {
+      // Only log progress every 5 batches to reduce log spam
+      if (batchNum % 5 === 1 || batchNum === totalBatches) {
         KatanaLogger.progress(prefix, batchNum, totalBatches, {
           batchNumber: batchNum
         });
@@ -149,9 +137,9 @@ async function runEquityTrendUpdate() {
 
       results.push(...batchResults);
 
-      // Add delay between batches to avoid overwhelming APIs
+      // Add delay between batches to stay under Etherscan rate limit (5 calls/sec)
       if (i + batchSize < activeUsers.length) {
-        await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay
+        await new Promise((resolve) => setTimeout(resolve, 5000)); // 5 second delay
       }
     }
 

@@ -81,6 +81,12 @@ async function getEtherPriceSushi(): Promise<number | null> {
 }
 
 async function getPriceSushi(address: string): Promise<number | null> {
+  // Special case: KAT token is not yet launched, return 0 price
+  const KAT_TOKEN_ADDRESS = "0x7f1f4b4b29f5058fa32cc7a97141b8d7e5abdc2d";
+  if (address.toLowerCase() === KAT_TOKEN_ADDRESS.toLowerCase()) {
+    return 0;
+  }
+
   // Wrap API call with retry logic
   const result = await retryWithBackoff(
     async () => {
