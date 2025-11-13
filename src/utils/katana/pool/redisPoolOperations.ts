@@ -2,7 +2,7 @@ import { getValue, storeValue } from '../../../redis/katanaTokens';
 import type { ProcessedPool } from '../types';
 
 const POOLS_CACHE_KEY = "pools_katana_all";
-const POOLS_CACHE_TTL = 30 * 60; // 30 minutes in seconds
+const POOLS_CACHE_TTL = 6 * 60 * 60; // 6 hours in seconds
 
 export interface StoredPoolsData {
   pools: ProcessedPool[];
@@ -77,7 +77,7 @@ export async function savePoolsDataToRedis(
 }
 
 /**
- * Check if cached data needs update (older than 30 minutes)
+ * Check if cached data needs update (older than 6 hours)
  */
 export function needsPoolsUpdate(lastUpdate: number): boolean {
   const now = Math.floor(Date.now() / 1000);
