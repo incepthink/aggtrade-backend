@@ -224,15 +224,15 @@ export const getEquityTrendForUser = async (
     // Step 2.5: Filter out incomplete and zero-balance data points
     const filteredHistory = balanceHistory.filter((record: any) => {
       // Filter out zero balance
-      // const balance = parseFloat(record.balance_usd);
-      // if (balance === 0) {
-      //   return false;
-      // }
-
-      // Filter out incomplete data (any component is 'n/a')
-      if (record.erc20 === 'n/a' || record.ether === 'n/a' || record.yearnfi === 'n/a') {
+      const balance = parseFloat(record.balance_usd);
+      if (balance === 0) {
         return false;
       }
+
+      // Filter out incomplete data (any component is 'n/a')
+      // if (record.erc20 === 'n/a' || record.ether === 'n/a' || record.yearnfi === 'n/a') {
+      //   return false;
+      // }
 
       return true;
     });
