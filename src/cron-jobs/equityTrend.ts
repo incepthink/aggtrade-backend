@@ -43,41 +43,51 @@ async function updateUserBalance(userId: number, walletAddress: string) {
     const isYearnfiValid = yearnfiBalUSD !== null && Number.isFinite(yearnfiBalUSD);
     const isErc20Valid = erc20BalanceUSD !== null && Number.isFinite(erc20BalanceUSD);
 
-    // Require ALL 3 components to be valid for chart consistency
+    // Convert invalid components to 'n/a' for storage
+    const etherBalanceStr = isEtherValid ? etherBalUSD.toString() : 'n/a';
+    const yearnfiBalanceStr = isYearnfiValid ? yearnfiBalUSD.toString() : 'n/a';
+    const erc20BalanceStr = isErc20Valid ? erc20BalanceUSD.toString() : 'n/a';
+
+    // Calculate total balance from only valid components (treat invalid as 0)
+    const totalBalanceUSD =
+      (isEtherValid ? etherBalUSD : 0) +
+      (isYearnfiValid ? yearnfiBalUSD : 0) +
+      (isErc20Valid ? erc20BalanceUSD : 0);
+
+    // Log warning if any components are invalid (partial data)
     if (!isEtherValid || !isYearnfiValid || !isErc20Valid) {
       const invalidComponents = [];
       if (!isEtherValid) invalidComponents.push('ETH');
       if (!isYearnfiValid) invalidComponents.push('Yearn');
       if (!isErc20Valid) invalidComponents.push('ERC20');
 
-      KatanaLogger.error(prefix, "Incomplete balance data - skipping to maintain chart consistency", undefined, {
+      KatanaLogger.warn(prefix, "Storing partial balance data", {
         walletAddress: walletAddress.substring(0, 10) + "...",
         invalidComponents: invalidComponents.join(', '),
-        ethValid: isEtherValid,
-        yearnValid: isYearnfiValid,
-        erc20Valid: isErc20Valid,
+        totalUSD: totalBalanceUSD.toFixed(2),
         correlationId
       });
-
-      throw new Error(`Incomplete balance data - missing: ${invalidComponents.join(', ')}`);
     }
 
-    // All components are valid - calculate total
-    const totalBalanceUSD = etherBalUSD + yearnfiBalUSD + erc20BalanceUSD;
-
-    // Store balance in history and update last check time in parallel
+    // Store balance in history (with component breakdown) and update last check time in parallel
     await Promise.all([
-      BalanceHistory.recordBalance(userId, totalBalanceUSD.toString()),
+      BalanceHistory.recordBalance(
+        userId,
+        totalBalanceUSD.toString(),
+        etherBalanceStr,
+        yearnfiBalanceStr,
+        erc20BalanceStr
+      ),
       User.updateLastCheck(walletAddress, 747474)
     ]);
 
-    // Log success with balance breakdown (all components are valid at this point)
+    // Log success with balance breakdown
     KatanaLogger.info(prefix, "User balance updated successfully", {
       walletAddress: walletAddress.substring(0, 10) + "...",
       totalUSD: totalBalanceUSD.toFixed(2),
-      ethUSD: etherBalUSD.toFixed(2),
-      yearnUSD: yearnfiBalUSD.toFixed(2),
-      erc20USD: erc20BalanceUSD.toFixed(2),
+      ethUSD: isEtherValid ? etherBalUSD.toFixed(2) : 'n/a',
+      yearnUSD: isYearnfiValid ? yearnfiBalUSD.toFixed(2) : 'n/a',
+      erc20USD: isErc20Valid ? erc20BalanceUSD.toFixed(2) : 'n/a',
       correlationId
     });
 

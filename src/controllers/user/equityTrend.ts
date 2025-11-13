@@ -57,41 +57,39 @@ const updateBalanceHistory = async (address: string) => {
     const isYearnfiValid = yearnfiBalUSD !== null && Number.isFinite(yearnfiBalUSD);
     const isErc20Valid = erc20BalanceUSD !== null && Number.isFinite(erc20BalanceUSD);
 
-    // Count valid balances
-    const validBalancesCount = [isEtherValid, isYearnfiValid, isErc20Valid].filter(Boolean).length;
+    // Convert invalid components to 'n/a' for storage
+    const etherBalanceStr = isEtherValid ? etherBalUSD.toString() : 'n/a';
+    const yearnfiBalanceStr = isYearnfiValid ? yearnfiBalUSD.toString() : 'n/a';
+    const erc20BalanceStr = isErc20Valid ? erc20BalanceUSD.toString() : 'n/a';
 
-    // If ALL balances are invalid, throw error
-    if (validBalancesCount === 0) {
-      console.error(
-        `[Update Balance History] All balance components failed for ${address}`
-      );
-
-      throw new Error(
-        `Cannot store balance - all balance components failed`
-      );
-    }
-
-    // If some balances are invalid, log warning but continue with partial data
-    if (validBalancesCount < 3) {
-      const invalidBalances = [];
-      if (!isEtherValid) invalidBalances.push(`etherBalUSD: ${etherBalUSD}`);
-      if (!isYearnfiValid) invalidBalances.push(`yearnfiBalUSD: ${yearnfiBalUSD}`);
-      if (!isErc20Valid) invalidBalances.push(`erc20BalanceUSD: ${erc20BalanceUSD}`);
-
-      console.warn(
-        `[Update Balance History] Partial balance data for ${address}. Invalid values: ${invalidBalances.join(', ')}`
-      );
-    }
-
-    // Calculate total balance using only valid components (treat invalid as 0)
+    // Calculate total balance from only valid components (treat invalid as 0)
     const totalBalanceUSD =
       (isEtherValid ? etherBalUSD : 0) +
       (isYearnfiValid ? yearnfiBalUSD : 0) +
       (isErc20Valid ? erc20BalanceUSD : 0);
 
-    // Store balance snapshot and update check time in parallel
+    // Log warning if any components are invalid (partial data)
+    if (!isEtherValid || !isYearnfiValid || !isErc20Valid) {
+      const invalidComponents = [];
+      if (!isEtherValid) invalidComponents.push('ETH');
+      if (!isYearnfiValid) invalidComponents.push('Yearn');
+      if (!isErc20Valid) invalidComponents.push('ERC20');
+
+      console.warn(
+        `[Update Balance History] Storing partial balance data for ${address}. ` +
+        `Invalid components: ${invalidComponents.join(', ')}`
+      );
+    }
+
+    // Store balance snapshot (with component breakdown) and update check time in parallel
     await Promise.all([
-      BalanceHistory.recordBalance(user.id, totalBalanceUSD.toString()),
+      BalanceHistory.recordBalance(
+        user.id,
+        totalBalanceUSD.toString(),
+        etherBalanceStr,
+        yearnfiBalanceStr,
+        erc20BalanceStr
+      ),
       User.updateLastCheck(address, chainId)
     ]);
 
@@ -223,8 +221,24 @@ export const getEquityTrendForUser = async (
       undefined  // limit - get all records
     );
 
+    // Step 2.5: Filter out incomplete and zero-balance data points
+    const filteredHistory = balanceHistory.filter((record: any) => {
+      // Filter out zero balance
+      const balance = parseFloat(record.balance_usd);
+      if (balance === 0) {
+        return false;
+      }
+
+      // Filter out incomplete data (any component is 'n/a')
+      if (record.erc20 === 'n/a' || record.ether === 'n/a' || record.yearnfi === 'n/a') {
+        return false;
+      }
+
+      return true;
+    });
+
     // Step 3: Format data for chart
-    const chartData = balanceHistory.map((record: any) => ({
+    const chartData = filteredHistory.map((record: any) => ({
       timestamp: record.timestamp,
       balance: parseFloat(record.balance_usd),
       // Format date for display (optional)

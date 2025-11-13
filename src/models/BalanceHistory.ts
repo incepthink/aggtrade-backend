@@ -13,6 +13,9 @@ export interface BalanceHistoryAttributes {
   id: number
   user_id: number
   balance_usd: string
+  erc20: string
+  ether: string
+  yearnfi: string
   timestamp: Date
 }
 
@@ -23,13 +26,25 @@ class BalanceHistory
   declare id: CreationOptional<number>
   declare user_id: number
   declare balance_usd: string
+  declare erc20: CreationOptional<string>
+  declare ether: CreationOptional<string>
+  declare yearnfi: CreationOptional<string>
   declare timestamp: CreationOptional<Date>
 
   // Static method to record balance
-  static async recordBalance(userId: number, balanceUsd: string) {
+  static async recordBalance(
+    userId: number,
+    balanceUsd: string,
+    etherBalance: string = 'n/a',
+    yearnfiBalance: string = 'n/a',
+    erc20Balance: string = 'n/a'
+  ) {
     return this.create({
       user_id: userId,
       balance_usd: balanceUsd,
+      ether: etherBalance,
+      yearnfi: yearnfiBalance,
+      erc20: erc20Balance,
       timestamp: new Date()
     })
   }
@@ -109,6 +124,21 @@ BalanceHistory.init(
       type: DataTypes.BIGINT.UNSIGNED,
       primaryKey: true,
       autoIncrement: true
+    },
+    erc20: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: 'n/a'
+    },
+    ether: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: 'n/a'
+    },
+    yearnfi: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: 'n/a'
     },
     user_id: {
       type: DataTypes.BIGINT.UNSIGNED,
