@@ -16,13 +16,64 @@ const retryWithBackoff = async <T>(
       return await fn();
     } catch (error) {
       if (attempt === maxRetries - 1) throw error;
-      
+
       const delay = baseDelay * Math.pow(2, attempt);
       console.log(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
   throw new Error("Max retries exceeded");
+};
+
+// Filter out incomplete data points that show V-pattern (drop then recovery)
+const filterIncompleteDataPoints = (
+  balanceHistory: any[],
+  dropThreshold = 30,
+  riseThreshold = 40
+): any[] => {
+  if (balanceHistory.length <= 2) {
+    // Not enough data to detect patterns
+    return balanceHistory;
+  }
+
+  const filtered: any[] = [];
+  let filteredCount = 0;
+
+  for (let i = 0; i < balanceHistory.length; i++) {
+    const current = parseFloat(balanceHistory[i].balance_usd);
+
+    // Always keep first and last points (can't check patterns)
+    if (i === 0 || i === balanceHistory.length - 1) {
+      filtered.push(balanceHistory[i]);
+      continue;
+    }
+
+    const previous = parseFloat(balanceHistory[i - 1].balance_usd);
+    const next = parseFloat(balanceHistory[i + 1].balance_usd);
+
+    // Calculate percentage changes
+    const dropPercent = ((previous - current) / previous) * 100;
+    const risePercent = ((next - current) / current) * 100;
+
+    // Check for V-pattern: significant drop from previous AND significant rise to next
+    const isIncomplete = dropPercent > dropThreshold && risePercent > riseThreshold;
+
+    if (isIncomplete) {
+      filteredCount++;
+      console.log(
+        `[Filter Incomplete Data] Removing point at ${balanceHistory[i].timestamp}: ` +
+        `balance=${current.toFixed(2)} (${dropPercent.toFixed(1)}% drop, ${risePercent.toFixed(1)}% rise)`
+      );
+    } else {
+      filtered.push(balanceHistory[i]);
+    }
+  }
+
+  if (filteredCount > 0) {
+    console.log(`[Filter Incomplete Data] Filtered out ${filteredCount} incomplete data points`);
+  }
+
+  return filtered;
 };
 
 const updateBalanceHistory = async (address: string) => {
@@ -223,8 +274,11 @@ export const getEquityTrendForUser = async (
       undefined  // limit - get all records
     );
 
+    // Step 2.5: Filter out incomplete data points (V-pattern detection)
+    const filteredBalanceHistory = filterIncompleteDataPoints(balanceHistory);
+
     // Step 3: Format data for chart
-    const chartData = balanceHistory.map((record: any) => ({
+    const chartData = filteredBalanceHistory.map((record: any) => ({
       timestamp: record.timestamp,
       balance: parseFloat(record.balance_usd),
       // Format date for display (optional)
