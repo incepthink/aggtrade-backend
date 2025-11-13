@@ -111,26 +111,27 @@ async function getPriceSushi(address: string): Promise<number | null> {
   return result;
 }
 
-export async function getErc20BalanceUSD(walletAddress: string): Promise<number> {
+export async function getErc20BalanceUSD(walletAddress: string): Promise<number | null> {
   try {
     // Get user and their token addresses
     const user = await User.findByWallet(walletAddress, 747474);
-    
+
     if (!user || !user.token_addresses || user.token_addresses.length === 0) {
       return 0;
     }
 
     const tokenAddresses = user.token_addresses;
     let totalUSD = 0;
+    let hasAnyFailure = false; // Track if any token fails
 
     // Fetch balances and prices in parallel
     const balancePromises = tokenAddresses.map(async (tokenAddress) => {
       try {
         const lowerCaseAddress = tokenAddress.toLowerCase();
-        
+
         // Skip ETH placeholder address
         if (lowerCaseAddress === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
-          return 0;
+          return { success: true, value: 0 };
         }
 
         // Get decimals for the token
@@ -158,17 +159,17 @@ export async function getErc20BalanceUSD(walletAddress: string): Promise<number>
           getPriceSushi(tokenAddress)
         ]);
 
-        // If balance fetch failed after retries, skip this token
+        // If balance fetch failed after retries, mark as failure
         if (balanceWei === null) {
           console.warn(`[getErc20BalanceUSD] Failed to fetch balance for token ${tokenAddress}`);
-          return 0;
+          return { success: false, value: 0 };
         }
 
         // Validate balance
         const balanceNum = validateNumber(balanceWei, `balance for ${tokenAddress}`);
         if (balanceNum === null) {
           console.warn(`[getErc20BalanceUSD] Invalid balance for token ${tokenAddress}`);
-          return 0;
+          return { success: false, value: 0 };
         }
 
         // Convert to human readable format
@@ -177,31 +178,44 @@ export async function getErc20BalanceUSD(walletAddress: string): Promise<number>
         // Validate price
         if (price === null || !isValidNumber(price)) {
           console.warn(`[getErc20BalanceUSD] Invalid price for token ${tokenAddress}, price: ${price}`);
-          return 0;
+          return { success: false, value: 0 };
         }
 
         // Calculate USD value with safe multiplication
         const usdValue = safeMultiply(balance, price);
         if (usdValue === null) {
           console.warn(`[getErc20BalanceUSD] Invalid USD calculation for token ${tokenAddress}`);
-          return 0;
+          return { success: false, value: 0 };
         }
 
-        return usdValue;
+        return { success: true, value: usdValue };
       } catch (error) {
         console.error(`Error fetching balance/price for ${tokenAddress}:`, error);
-        return 0;
+        return { success: false, value: 0 };
       }
     });
 
-    // Wait for all promises and sum up
-    const usdValues = await Promise.all(balancePromises);
-    totalUSD = usdValues.reduce((sum, value) => sum + value, 0);
+    // Wait for all promises and check for failures
+    const results = await Promise.all(balancePromises);
+
+    // Check if any token failed and sum up values
+    for (const result of results) {
+      if (!result.success) {
+        hasAnyFailure = true;
+      }
+      totalUSD += result.value;
+    }
+
+    // If any token failed, return null to mark entire balance as failed
+    if (hasAnyFailure) {
+      console.warn(`[getErc20BalanceUSD] One or more tokens failed for ${walletAddress}, marking as failed`);
+      return null;
+    }
 
     return totalUSD;
   } catch (error) {
     console.error("[getErc20BalanceUSD] Error:", error);
-    return 0;
+    return null;
   }
 }
 

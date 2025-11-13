@@ -7,7 +7,8 @@
       "Bash(echo:*)",
       "Bash(npx sequelize-cli:*)",
       "Bash(mv:*)",
-      "Bash(rmdir:*)"
+      "Bash(rmdir:*)",
+      "Bash(npx tsc:*)"
     ],
     "deny": [],
     "ask": []
