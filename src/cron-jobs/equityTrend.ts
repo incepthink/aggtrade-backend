@@ -201,13 +201,13 @@ cron.schedule("0 */4 * * *", async () => {
 });
 
 // Run immediately on startup for testing
-(async () => {
-  const prefix = "[EquityTrendStartup]";
-  KatanaLogger.info(prefix, "Starting equity trend tracker");
-  KatanaLogger.info(prefix, "Scheduled to run every 4 hours");
-  KatanaLogger.info(prefix, "Running initial update now");
+// (async () => {
+//   const prefix = "[EquityTrendStartup]";
+//   KatanaLogger.info(prefix, "Starting equity trend tracker");
+//   KatanaLogger.info(prefix, "Scheduled to run every 4 hours");
+//   KatanaLogger.info(prefix, "Running initial update now");
 
-  await runEquityTrendUpdate();
-})();
+//   await runEquityTrendUpdate();
+// })();
 
 KatanaLogger.info("[EquityTrendCron]", "Equity trend tracker initialized and scheduled");
