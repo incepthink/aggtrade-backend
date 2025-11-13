@@ -16,6 +16,7 @@ export interface BalanceHistoryAttributes {
   erc20: string
   ether: string
   yearnfi: string
+  status: string
   timestamp: Date
 }
 
@@ -29,6 +30,7 @@ class BalanceHistory
   declare erc20: CreationOptional<string>
   declare ether: CreationOptional<string>
   declare yearnfi: CreationOptional<string>
+  declare status: CreationOptional<string>
   declare timestamp: CreationOptional<Date>
 
   // Static method to record balance
@@ -37,7 +39,8 @@ class BalanceHistory
     balanceUsd: string,
     etherBalance: string = 'n/a',
     yearnfiBalance: string = 'n/a',
-    erc20Balance: string = 'n/a'
+    erc20Balance: string = 'n/a',
+    status: string = 'success'
   ) {
     return this.create({
       user_id: userId,
@@ -45,6 +48,7 @@ class BalanceHistory
       ether: etherBalance,
       yearnfi: yearnfiBalance,
       erc20: erc20Balance,
+      status: status,
       timestamp: new Date()
     })
   }
@@ -54,10 +58,16 @@ class BalanceHistory
     userId: number,
     startDate?: Date,
     endDate?: Date,
-    limit?: number
+    limit?: number,
+    includeFailedRecords: boolean = false
   ) {
     const whereClause: any = { user_id: userId }
-    
+
+    // Filter out failed records by default
+    if (!includeFailedRecords) {
+      whereClause.status = { [Op.ne]: 'fail' }
+    }
+
     if (startDate || endDate) {
       whereClause.timestamp = {}
       if (startDate) whereClause.timestamp[Op.gte] = startDate
@@ -139,6 +149,11 @@ BalanceHistory.init(
       type: DataTypes.STRING,
       allowNull: false,
       defaultValue: 'n/a'
+    },
+    status: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: 'success'
     },
     user_id: {
       type: DataTypes.BIGINT.UNSIGNED,

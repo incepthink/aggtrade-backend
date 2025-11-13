@@ -68,27 +68,33 @@ const updateBalanceHistory = async (address: string) => {
       (isYearnfiValid ? yearnfiBalUSD : 0) +
       (isErc20Valid ? erc20BalanceUSD : 0);
 
-    // Log warning if any components are invalid (partial data)
-    if (!isEtherValid || !isYearnfiValid || !isErc20Valid) {
+    // Determine status based on data completeness
+    const hasIncompleteData = !isEtherValid || !isYearnfiValid || !isErc20Valid;
+    const status = hasIncompleteData ? 'fail' : 'success';
+
+    // Log warning if any components are invalid (incomplete data)
+    if (hasIncompleteData) {
       const invalidComponents = [];
       if (!isEtherValid) invalidComponents.push('ETH');
       if (!isYearnfiValid) invalidComponents.push('Yearn');
       if (!isErc20Valid) invalidComponents.push('ERC20');
 
       console.warn(
-        `[Update Balance History] Storing partial balance data for ${address}. ` +
-        `Invalid components: ${invalidComponents.join(', ')}`
+        `[Update Balance History] Storing incomplete data with status='fail' for ${address}. ` +
+        `Invalid components: ${invalidComponents.join(', ')}. ` +
+        `This record will be filtered out from queries.`
       );
     }
 
-    // Store balance snapshot (with component breakdown) and update check time in parallel
+    // Store balance snapshot (with component breakdown and status) and update check time in parallel
     await Promise.all([
       BalanceHistory.recordBalance(
         user.id,
         totalBalanceUSD.toString(),
         etherBalanceStr,
         yearnfiBalanceStr,
-        erc20BalanceStr
+        erc20BalanceStr,
+        status
       ),
       User.updateLastCheck(address, chainId)
     ]);

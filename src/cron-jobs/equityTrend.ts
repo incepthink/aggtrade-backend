@@ -54,29 +54,35 @@ async function updateUserBalance(userId: number, walletAddress: string) {
       (isYearnfiValid ? yearnfiBalUSD : 0) +
       (isErc20Valid ? erc20BalanceUSD : 0);
 
+    // Determine status based on data completeness
+    const hasIncompleteData = !isEtherValid || !isYearnfiValid || !isErc20Valid;
+    const status = hasIncompleteData ? 'fail' : 'success';
+
     // Log warning if any components are invalid (partial data)
-    if (!isEtherValid || !isYearnfiValid || !isErc20Valid) {
+    if (hasIncompleteData) {
       const invalidComponents = [];
       if (!isEtherValid) invalidComponents.push('ETH');
       if (!isYearnfiValid) invalidComponents.push('Yearn');
       if (!isErc20Valid) invalidComponents.push('ERC20');
 
-      KatanaLogger.warn(prefix, "Storing partial balance data", {
+      KatanaLogger.warn(prefix, "Storing incomplete balance data with status='fail'", {
         walletAddress: walletAddress.substring(0, 10) + "...",
         invalidComponents: invalidComponents.join(', '),
         totalUSD: totalBalanceUSD.toFixed(2),
+        status: 'fail',
         correlationId
       });
     }
 
-    // Store balance in history (with component breakdown) and update last check time in parallel
+    // Store balance in history (with component breakdown and status) and update last check time in parallel
     await Promise.all([
       BalanceHistory.recordBalance(
         userId,
         totalBalanceUSD.toString(),
         etherBalanceStr,
         yearnfiBalanceStr,
-        erc20BalanceStr
+        erc20BalanceStr,
+        status
       ),
       User.updateLastCheck(walletAddress, 747474)
     ]);

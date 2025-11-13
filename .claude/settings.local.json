@@ -4,7 +4,10 @@
       "Bash(cat:*)",
       "Bash(node -e:*)",
       "Bash(npm run build:*)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(npx sequelize-cli:*)",
+      "Bash(mv:*)",
+      "Bash(rmdir:*)"
     ],
     "deny": [],
     "ask": []
