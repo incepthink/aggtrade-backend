@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from "express";
 import { getUserByReferralCode, getUserByWalletAddress, getUserByWalletAddressOrCreate } from "../services/user";
 import { createReferral, deleteReferral, getReferralCodeByUserId, getUserReferralDataById } from "../services/referral";
 import User from "../models/User";
+import ReferralCode from "../models/ReferralCode";
 
 interface ReferredUser {
     address: string
@@ -39,10 +40,15 @@ export const getUserReferralData = async (req: Request, res: Response, next: Nex
             return res.status(404).json({ error: 'User not found' })
         }
 
-        // Get user's referral code
-        const referralCode = await getReferralCodeByUserId(user.id)
+        // Get user's referral code, create if it doesn't exist
+        let referralCode = await getReferralCodeByUserId(user.id)
         if (!referralCode) {
-            return res.status(404).json({ error: 'Referral code not found' })
+            // Create referral code for this user (handles production edge case)
+            const code = await ReferralCode.generateUniqueCode()
+            referralCode = await ReferralCode.create({
+                user_id: user.id,
+                code
+            })
         }
 
         // Get referral data
