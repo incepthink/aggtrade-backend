@@ -8,7 +8,10 @@
       "Bash(npx sequelize-cli:*)",
       "Bash(mv:*)",
       "Bash(rmdir:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(mysql:*)",
+      "Bash(bun run:*)",
+      "Bash(rm:*)"
     ],
     "deny": [],
     "ask": []

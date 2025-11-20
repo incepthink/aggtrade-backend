@@ -15,6 +15,7 @@ export interface UserAttributes {
   is_active: boolean
   token_addresses: string[]
   last_balance_check: Date | null
+  signature: string | null
   created_at?: Date
   updated_at?: Date
 }
@@ -29,6 +30,7 @@ class User
   declare is_active: boolean
   declare token_addresses: string[]
   declare last_balance_check: Date | null
+  declare signature: string | null
   declare created_at: CreationOptional<Date>
   declare updated_at: CreationOptional<Date>
 
@@ -245,6 +247,10 @@ User.init(
     last_balance_check: {
       type: DataTypes.DATE,
       allowNull: true
+    },
+    signature: {
+      type: DataTypes.TEXT,
+      allowNull: true,
     },
     created_at: {
       type: DataTypes.DATE,

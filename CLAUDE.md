@@ -27,6 +27,7 @@ MySQL connection configured via `src/config/config.json` with environment-specif
 
 Run migrations manually:
 ```bash
+# Note: Migration files use .cjs extension (CommonJS) due to "type": "module" in package.json
 npx sequelize-cli db:migrate
 ```
 
@@ -87,8 +88,43 @@ All OHLC endpoints support:
 - KatanaSwap: Swap events from Katana chain (migrated from MongoDB)
 - Token: Token metadata and status
 - BalanceHistory: User portfolio tracking over time
+- UserActivityLog: Comprehensive activity logging for all user interactions
 
 Associations defined in `src/models/index.ts` handle User ↔ ReferralCode and User ↔ Referral relationships.
+
+### User Activity Tracking
+
+**UserActivityLog Model** (src/models/UserActivityLog.ts):
+- Comprehensive activity logging for all user interactions across platforms
+- Tracks: swaps, deposits, withdrawals, staking actions with USD volume
+- Supports: leaderboards, referral analytics, platform statistics
+- Optimized indexes for time-series queries and leaderboard calculations
+
+**Activity Routes** (src/routes/activity.ts):
+- POST `/api/activity` - Create activity log
+- POST `/api/activity/bulk` - Bulk create activities
+- GET `/api/activity/user/:userId` - User activity feed
+- GET `/api/activity/wallet/:walletAddress/volume` - Volume by wallet
+- GET `/api/activity/leaderboard/:actionCategory` - Leaderboards
+- GET `/api/activity/platform/:platform/stats` - Platform analytics
+- GET `/api/activity/token/:tokenAddress/stats` - Token statistics
+- GET `/api/activity/tx/:txHash` - Get activity by transaction hash
+- PATCH `/api/activity/tx/:txHash/status` - Update activity status
+- DELETE `/api/activity/tx/:txHash` - Delete activity by tx hash
+
+### Wallet Signature Authentication
+
+**Purpose**: Verify users connecting through frontend vs direct API access
+
+**User Model** (src/models/User.ts):
+- `signature` field stores one-time wallet signature for authentication
+- Uses ethers.js `verifyMessage()` for cryptographic verification
+
+**Authentication Endpoints** (src/controllers/user/wallet.ts):
+- GET `/user/signature?wallet={address}` - Check if signature exists (returns `{ exists: boolean }`)
+- POST `/user/signature` - Store signature (body: `{ wallet, signature, message, timestamp }`)
+
+**Flow**: User signs message on first connect → Signature verified and stored → Future requests can verify user authenticity
 
 ### Services Layer (src/services/)
 

@@ -34,7 +34,7 @@ export const getUserReferralData = async (req: Request, res: Response, next: Nex
         const { userAddress } = req.params
 
         // Get user
-        const [user] = await getUserByWalletAddressOrCreate(userAddress)
+        const [user, created] = await getUserByWalletAddressOrCreate(userAddress)
         if (!user) {
             return res.status(404).json({ error: 'User not found' })
         }

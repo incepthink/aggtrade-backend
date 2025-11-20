@@ -3,6 +3,7 @@ import { getEquityTrendForUser } from "../controllers/user/equityTrend";
 import { getKatanaBalanceRoute } from "../controllers/katanaRoutes";
 import { addUserReferral, getUserReferralData, removeUserReferral } from "../controllers/referral";
 import { getUserSushiswapTvl } from "../controllers/user/TVL";
+import { getUserSignature, storeUserSignature } from "../controllers/user/wallet";
 
 const router = Router()
 
@@ -12,5 +13,7 @@ router.get("/referrals/:userAddress", getUserReferralData)
 router.post("/referrals/add", addUserReferral)
 router.delete("/referrals", removeUserReferral)
 router.get("/tvl/sushiswap/:userAddress", getUserSushiswapTvl)
+router.get("/signature", getUserSignature)
+router.post("/signature", storeUserSignature)
 
 export default router
