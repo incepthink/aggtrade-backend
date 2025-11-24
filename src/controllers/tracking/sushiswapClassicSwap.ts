@@ -1,0 +1,211 @@
+import type { Request, Response, NextFunction } from "express"
+import SushiswapActivity from "../../models/SushiswapActivity"
+import User from "../../models/User"
+
+interface ClassicSwapRequest {
+  walletAddress: string
+  txHash: string
+  chainId?: number
+  blockNumber?: number
+  blockTimestamp?: string
+  tokenFrom: {
+    address: string
+    symbol: string
+    amount: string
+  }
+  tokenTo: {
+    address: string
+    symbol: string
+    amount: string
+  }
+  usdVolume: number
+  executionPrice: number
+  poolId?: string
+  timestamp?: string
+  status?: 'success' | 'failed' | 'pending'
+}
+
+/**
+ * POST /tracking/sushiswap/classic-swap
+ * Log a classic swap execution from frontend
+ */
+export const logClassicSwap = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const data: ClassicSwapRequest = req.body
+
+    // Validate required fields
+    if (!data.walletAddress || !data.txHash || !data.tokenFrom || !data.tokenTo || data.usdVolume === undefined || data.executionPrice === undefined) {
+      return res.status(400).json({
+        error: 'Missing required fields: walletAddress, txHash, tokenFrom, tokenTo, usdVolume, executionPrice'
+      })
+    }
+
+    // Normalize wallet address
+    const normalizedWallet = data.walletAddress.toLowerCase()
+
+    // Get or create user
+    const [user, created] = await User.findOrCreate({
+      where: { wallet_address: normalizedWallet },
+      defaults: {
+        wallet_address: normalizedWallet,
+        chain_id: data.chainId || 747474,
+        is_active: true,
+        token_addresses: [],
+        last_balance_check: null
+      }
+    })
+
+    // Check if transaction already logged
+    const existing = await SushiswapActivity.findOne({
+      where: { tx_hash: data.txHash }
+    })
+
+    if (existing) {
+      return res.status(409).json({
+        error: 'Transaction already logged',
+        activity: existing
+      })
+    }
+
+    // Create activity record
+    const activity = await SushiswapActivity.create({
+      user_id: user.id,
+      wallet_address: normalizedWallet,
+      swap_type: 'CLASSIC',
+      tx_hash: data.txHash,
+      chain_id: data.chainId || 747474,
+      block_number: data.blockNumber || null,
+      block_timestamp: data.blockTimestamp ? new Date(data.blockTimestamp) : null,
+      token_from_address: data.tokenFrom.address.toLowerCase(),
+      token_from_symbol: data.tokenFrom.symbol,
+      token_from_amount: data.tokenFrom.amount,
+      token_to_address: data.tokenTo.address.toLowerCase(),
+      token_to_symbol: data.tokenTo.symbol,
+      token_to_amount: data.tokenTo.amount,
+      usd_volume: data.usdVolume,
+      execution_price: data.executionPrice,
+      pool_id: data.poolId || null,
+      order_id: null,
+      filled_src_amount: null,
+      filled_dst_amount: null,
+      is_partial_fill: false,
+      progress: null,
+      status: data.status || 'success',
+      metadata: {
+        userCreated: created
+      },
+      timestamp: data.timestamp ? new Date(data.timestamp) : new Date()
+    })
+
+    return res.status(201).json({
+      message: 'Classic swap logged successfully',
+      activity: {
+        id: activity.id,
+        txHash: activity.tx_hash,
+        swapType: activity.swap_type,
+        usdVolume: activity.usd_volume,
+        timestamp: activity.timestamp
+      }
+    })
+
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * GET /tracking/sushiswap/user/:walletAddress/volume
+ * Get user's total swap volume
+ */
+export const getUserVolume = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { walletAddress } = req.params
+    const { startDate, endDate } = req.query
+
+    const normalizedWallet = walletAddress.toLowerCase()
+
+    const whereClause: any = {
+      wallet_address: normalizedWallet,
+      swap_type: 'CLASSIC',
+      status: 'success'
+    }
+
+    if (startDate && endDate) {
+      whereClause.timestamp = {
+        $between: [new Date(startDate as string), new Date(endDate as string)]
+      }
+    }
+
+    const result = await SushiswapActivity.findOne({
+      attributes: [
+        [SushiswapActivity.sequelize!.fn('SUM', SushiswapActivity.sequelize!.col('usd_volume')), 'total_volume'],
+        [SushiswapActivity.sequelize!.fn('COUNT', SushiswapActivity.sequelize!.col('id')), 'swap_count']
+      ],
+      where: whereClause,
+      raw: true
+    })
+
+    return res.status(200).json({
+      walletAddress,
+      totalVolume: (result as any)?.total_volume || 0,
+      swapCount: (result as any)?.swap_count || 0
+    })
+
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * GET /tracking/sushiswap/user/:walletAddress/history
+ * Get user's swap history
+ */
+export const getUserSwapHistory = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { walletAddress } = req.params
+    const { limit = 50, offset = 0 } = req.query
+
+    const normalizedWallet = walletAddress.toLowerCase()
+
+    const swaps = await SushiswapActivity.findAll({
+      where: {
+        wallet_address: normalizedWallet,
+        swap_type: 'CLASSIC'
+      },
+      order: [['timestamp', 'DESC']],
+      limit: Number(limit),
+      offset: Number(offset)
+    })
+
+    return res.status(200).json({
+      walletAddress,
+      swaps
+    })
+
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * GET /tracking/sushiswap/tx/:txHash
+ * Get swap details by transaction hash
+ */
+export const getSwapByTxHash = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { txHash } = req.params
+
+    const swap = await SushiswapActivity.findOne({
+      where: { tx_hash: txHash }
+    })
+
+    if (!swap) {
+      return res.status(404).json({ error: 'Swap not found' })
+    }
+
+    return res.status(200).json({ swap })
+
+  } catch (error) {
+    next(error)
+  }
+}
