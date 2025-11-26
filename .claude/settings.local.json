@@ -11,7 +11,9 @@
       "Bash(npx tsc:*)",
       "Bash(mysql:*)",
       "Bash(bun run:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(npm view:*)",
+      "Bash(npm install:*)"
     ],
     "deny": [],
     "ask": []

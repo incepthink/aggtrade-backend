@@ -15,6 +15,8 @@ export interface BotWalletExecutionAttributes {
   tokens: string[]
   swaps_completed: number
   total_volume_usd: number
+  limit_orders_placed: number
+  limit_orders_filled: number
   status: 'pending' | 'running' | 'completed' | 'failed'
   error_message: string | null
   start_time: Date | null
@@ -34,6 +36,8 @@ class BotWalletExecution
   declare tokens: string[]
   declare swaps_completed: CreationOptional<number>
   declare total_volume_usd: CreationOptional<number>
+  declare limit_orders_placed: CreationOptional<number>
+  declare limit_orders_filled: CreationOptional<number>
   declare status: 'pending' | 'running' | 'completed' | 'failed'
   declare error_message: string | null
   declare start_time: Date | null
@@ -77,6 +81,16 @@ BotWalletExecution.init(
     },
     total_volume_usd: {
       type: DataTypes.DECIMAL(30, 6),
+      allowNull: false,
+      defaultValue: 0
+    },
+    limit_orders_placed: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
+      defaultValue: 0
+    },
+    limit_orders_filled: {
+      type: DataTypes.INTEGER.UNSIGNED,
       allowNull: false,
       defaultValue: 0
     },

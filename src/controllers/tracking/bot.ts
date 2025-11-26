@@ -102,6 +102,8 @@ export const startWalletExecution = async (req: Request, res: Response, next: Ne
     })
 
   } catch (error) {
+    console.log("startWalletExecution", error);
+    
     next(error)
   }
 }
@@ -113,7 +115,16 @@ export const startWalletExecution = async (req: Request, res: Response, next: Ne
 export const completeWalletExecution = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id, wallet_index } = req.params
-    const { status, error_message, swaps_completed, total_volume_usd, wallet_address, tokens } = req.body
+    const {
+      status,
+      error_message,
+      swaps_completed,
+      total_volume_usd,
+      wallet_address,
+      tokens,
+      limit_orders_placed,
+      limit_orders_filled
+    } = req.body
 
     if (!status || !['completed', 'failed'].includes(status)) {
       return res.status(400).json({ error: 'Invalid status. Must be "completed" or "failed"' })
@@ -140,7 +151,9 @@ export const completeWalletExecution = async (req: Request, res: Response, next:
       error_message: error_message || null,
       end_time: new Date(),
       swaps_completed: Number(swaps_completed),
-      total_volume_usd: Number(total_volume_usd)
+      total_volume_usd: Number(total_volume_usd),
+      limit_orders_placed: limit_orders_placed !== undefined ? Number(limit_orders_placed) : 0,
+      limit_orders_filled: limit_orders_filled !== undefined ? Number(limit_orders_filled) : 0
     }
 
     // Update wallet_address if provided
