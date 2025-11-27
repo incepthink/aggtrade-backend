@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express"
 import SushiswapActivity from "../../models/SushiswapActivity"
+import Token from "../../models/Token"
 import { Op } from "sequelize"
 
 /**
@@ -79,8 +80,56 @@ export const getDashboardData = async (req: Request, res: Response, next: NextFu
       raw: true
     })
 
+    // Fetch token logos for swaps
+    const uniqueTokenAddresses = new Set<string>()
+    swaps.forEach(swap => {
+      // Replace native ETH address with vbETH for logo lookup
+      const tokenFromAddress = swap.token_from_address.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+        ? '0xee7d8bcfb72bc1880d0cf19822eb0a2e6577ab62'
+        : swap.token_from_address.toLowerCase()
+      const tokenToAddress = swap.token_to_address.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+        ? '0xee7d8bcfb72bc1880d0cf19822eb0a2e6577ab62'
+        : swap.token_to_address.toLowerCase()
+
+      uniqueTokenAddresses.add(tokenFromAddress)
+      uniqueTokenAddresses.add(tokenToAddress)
+    })
+
+    const tokens = await Token.findAll({
+      where: {
+        address: {
+          [Op.in]: Array.from(uniqueTokenAddresses)
+        }
+      },
+      attributes: ['address', 'logo_uri'],
+      raw: true
+    })
+
+    // Create logo map
+    const logoMap = new Map()
+    tokens.forEach((token: any) => {
+      logoMap.set(token.address, token.logo_uri)
+    })
+
+    // Add logos to swaps
+    const swapsWithLogos = swaps.map(swap => {
+      // Use vbETH address for native ETH logo lookup
+      const tokenFromLookup = swap.token_from_address.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+        ? '0xee7d8bcfb72bc1880d0cf19822eb0a2e6577ab62'
+        : swap.token_from_address.toLowerCase()
+      const tokenToLookup = swap.token_to_address.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+        ? '0xee7d8bcfb72bc1880d0cf19822eb0a2e6577ab62'
+        : swap.token_to_address.toLowerCase()
+
+      return {
+        ...swap.toJSON(),
+        token_from_logo: logoMap.get(tokenFromLookup) || null,
+        token_to_logo: logoMap.get(tokenToLookup) || null
+      }
+    })
+
     return res.status(200).json({
-      swaps,
+      swaps: swapsWithLogos,
       statistics: {
         total_swaps: (stats as any)?.total_swaps || 0,
         total_volume_usd: parseFloat((stats as any)?.total_volume_usd || 0),
@@ -263,8 +312,32 @@ export const getTopTokens = async (req: Request, res: Response, next: NextFuncti
       .sort((a, b) => b.volume - a.volume)
       .slice(0, Number(limit))
 
+    // Fetch token logos for top tokens
+    const tokenAddresses = topTokens.map(t => t.address)
+    const tokens = await Token.findAll({
+      where: {
+        address: {
+          [Op.in]: tokenAddresses.map(addr => addr.toLowerCase())
+        }
+      },
+      attributes: ['address', 'logo_uri'],
+      raw: true
+    })
+
+    // Create logo map
+    const logoMap = new Map()
+    tokens.forEach((token: any) => {
+      logoMap.set(token.address, token.logo_uri)
+    })
+
+    // Add logos to top tokens
+    const tokensWithLogos = topTokens.map(token => ({
+      ...token,
+      logo_uri: logoMap.get(token.address.toLowerCase()) || null
+    }))
+
     return res.status(200).json({
-      tokens: topTokens
+      tokens: tokensWithLogos
     })
 
   } catch (error) {

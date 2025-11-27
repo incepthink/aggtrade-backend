@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from "express"
 import { ChainId } from "sushi"
 import { getQuote, getSwap } from "sushi/evm"
 import type { QuoteRequest, ExecuteRequest } from "../../../types/transaction"
+import { Address } from "viem"
 
 /**
  * POST /transaction/classic-swap/quote
@@ -52,8 +53,8 @@ export const getClassicSwapQuote = async (
     // Get quote data from Sushi SDK
     const quote = await getQuote({
       chainId: ChainId.KATANA,
-      tokenIn: tokenIn.address,
-      tokenOut: tokenOut.address,
+      tokenIn: tokenIn.address as Address,
+      tokenOut: tokenOut.address as Address,
       amount: amountInWei,
       maxSlippage: slippage / 100
     })
@@ -61,14 +62,14 @@ export const getClassicSwapQuote = async (
     // Get router address using dummy sender
     const dummySwap = await getSwap({
       chainId: ChainId.KATANA,
-      tokenIn: tokenIn.address,
-      tokenOut: tokenOut.address,
+      tokenIn: tokenIn.address as Address,
+      tokenOut: tokenOut.address as Address,
       amount: amountInWei,
       maxSlippage: slippage / 100,
       sender: "0x0000000000000000000000000000000000000000"
     })
 
-    const routerAddress = dummySwap.to || ''
+    const routerAddress = dummySwap.tx?.to || ''
 
     // Format response
     return res.status(200).json({
@@ -151,15 +152,15 @@ export const executeClassicSwap = async (
     // Get swap transaction data from Sushi SDK
     const swap = await getSwap({
       chainId: ChainId.KATANA,
-      tokenIn: tokenIn.address,
-      tokenOut: tokenOut.address,
+      tokenIn: tokenIn.address as Address,
+    tokenOut: tokenOut.address as Address,
       amount: amountInWei,
       maxSlippage: slippage / 100,
-      sender: userAddress
+      sender: userAddress as Address
     })
 
     // Validate swap response
-    if (!swap || !swap.to || !swap.data) {
+    if (!swap || !swap.tx || !swap.tx.to || !swap.tx.data) {
       return res.status(500).json({
         error: 'Failed to generate swap transaction',
         details: 'Invalid response from Sushi SDK'
@@ -170,9 +171,9 @@ export const executeClassicSwap = async (
     return res.status(200).json({
       message: 'Swap transaction generated successfully',
       data: {
-        to: swap.to,
-        data: swap.data,
-        value: swap.value?.toString() || '0'
+        to: swap.tx.to,
+        data: swap.tx.data,
+        value: swap.tx.value?.toString() || '0'
       }
     })
 

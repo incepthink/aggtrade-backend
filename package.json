@@ -17,6 +17,7 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
+    "@orbs-network/twap-sdk": "^4.0.92",
     "@types/node": "^24.0.7",
     "axios": "^1.10.0",
     "bottleneck": "^2.19.5",
@@ -36,6 +37,7 @@
     "sequelize": "^6.37.7",
     "sushi": "^6.2.19",
     "ts-node": "^10.9.2",
+    "viem": "^2.40.3",
     "zod": "^3.25.67"
   }
 }
