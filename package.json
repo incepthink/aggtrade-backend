@@ -6,7 +6,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "bot": "bun TvlBot/cli/index.ts",
-    "bot:sushi": "bun run bot -- platform=sushiswap"
+    "bot:sushi": "bun run bot -- platform=sushiswap",
+    "bot:limit-order": "bun run src/scripts/runLimitOrderBot.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

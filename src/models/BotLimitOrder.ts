@@ -9,7 +9,7 @@ import sequelize from '../utils/db/sequelize'
 
 export interface BotLimitOrderAttributes {
   id: number
-  execution_id: number
+  execution_id: string
   wallet_index: number
   wallet_address: string
   order_id: string
@@ -39,7 +39,7 @@ class BotLimitOrder
   implements BotLimitOrderAttributes
 {
   declare id: CreationOptional<number>
-  declare execution_id: number
+  declare execution_id: string
   declare wallet_index: number
   declare wallet_address: string
   declare order_id: string
@@ -72,11 +72,11 @@ BotLimitOrder.init(
       autoIncrement: true
     },
     execution_id: {
-      type: DataTypes.BIGINT.UNSIGNED,
+      type: DataTypes.STRING(100),
       allowNull: false,
       references: {
         model: 'bot_executions',
-        key: 'id'
+        key: 'execution_id'
       },
       onDelete: 'CASCADE'
     },
