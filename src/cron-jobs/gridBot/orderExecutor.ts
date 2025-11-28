@@ -1,3 +1,4 @@
+import { ethers } from 'ethers'
 import { OrderParams } from './types'
 import {TwapService} from '../../services/twap'
 import User from '../../models/User'
@@ -15,7 +16,8 @@ import { createOrderInBothTables } from './databaseSync'
 
 const PREFIX = '[OrderExecutor]'
 
-const TWAP_CONTRACT_ADDRESS = '0x64D3bb94Ac60Cb2d1f2C5A48FAB5E725A50EEC25' // Katana TWAP contract
+// Use ethers.getAddress() to ensure proper checksum formatting for ethers v6
+// const TWAP_CONTRACT_ADDRESS = ethers.getAddress('0x64D3bb94Ac60Cb2d1f2C5A48FAB5E725A50EEC25') // Katana TWAP contract
 const CHAIN_ID = 747474
 
 /**
@@ -91,7 +93,7 @@ export async function placeOrder(params: OrderParams): Promise<any> {
       const approvalResult = await ensureTokenApproval(
         wallet.signer,
         fromToken.address,
-        TWAP_CONTRACT_ADDRESS,
+        transaction.to,
         srcAmountWei,
         false
       )

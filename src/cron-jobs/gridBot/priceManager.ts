@@ -1,69 +1,58 @@
-import {redis} from '../../redis'
+import axios from 'axios'
 import { KatanaLogger } from '../../utils/logger'
+import { sleep } from '../utils/botHelpers'
 
 const PREFIX = '[PriceManager]'
 
-const CACHE_KEY = 'grid_bot:eth_price'
-const CACHE_TTL = 30 // 30 seconds
 const FALLBACK_PRICE = 3000 // Fallback ETH price in USD
+const MAX_RETRIES = 3 // Maximum number of retry attempts
+const RETRY_DELAY_MS = 3000 // 3 seconds delay between retries
 
 const ETH_ADDRESS = '0xEE7D8BCFb72bC1880D0Cf19822eB0A2e6577aB62'
 const CHAIN_ID = 747474 // Katana
 
 /**
- * Fetch current ETH price from Sushi API with Redis caching
+ * Fetch current ETH price from Sushi API (no caching, with retry logic)
  */
 export async function getCurrentETHPrice(): Promise<number> {
-  try {
-    // 1. Check Redis cache
-    const cached = await redis.get(CACHE_KEY)
-    if (cached) {
-      const price = parseFloat(cached)
-      KatanaLogger.info(PREFIX, `ETH price from cache: $${price}`)
-      return price
-    }
+  const url = `https://api.sushi.com/price/v1/${CHAIN_ID}/${ETH_ADDRESS.toLowerCase()}`
 
-    // 2. Fetch from Sushi API
-    const url = `https://api.sushi.com/price/v1/${CHAIN_ID}/${ETH_ADDRESS.toLowerCase()}`
-    KatanaLogger.info(PREFIX, `Fetching ETH price from Sushi API: ${url}`)
-
-    const response = await fetch(url)
-
-    if (!response.ok) {
-      throw new Error(`Sushi API returned ${response.status}: ${response.statusText}`)
-    }
-
-    const data = await response.json()
-    const price = data?.price || FALLBACK_PRICE
-
-    if (!price || price <= 0) {
-      throw new Error(`Invalid price received: ${price}`)
-    }
-
-    // 3. Cache for 30 seconds
-    await redis.setex(CACHE_KEY, CACHE_TTL, price.toString())
-
-    KatanaLogger.info(PREFIX, `ETH price from API: $${price} (cached for ${CACHE_TTL}s)`)
-    return price
-  } catch (error) {
-    KatanaLogger.error(PREFIX, 'Failed to fetch ETH price from Sushi API', error)
-
-    // 4. Try to get last cached value (expired or not)
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const lastCached = await redis.get(CACHE_KEY)
-      if (lastCached) {
-        const price = parseFloat(lastCached)
-        KatanaLogger.warn(PREFIX, `Using expired cached price: $${price}`)
-        return price
-      }
-    } catch (cacheError) {
-      KatanaLogger.error(PREFIX, 'Failed to read from cache', cacheError)
-    }
+      KatanaLogger.info(PREFIX, `Fetching ETH price from Sushi API (attempt ${attempt}/${MAX_RETRIES}): ${url}`)
 
-    // 5. Final fallback
-    KatanaLogger.warn(PREFIX, `Using fallback price: $${FALLBACK_PRICE}`)
-    return FALLBACK_PRICE
+      const response = await axios.get(url)
+
+      if (!response.data) {
+        throw new Error(`Sushi API returned ${response.status}: ${response.statusText}`)
+      }
+
+      const data = await response.data
+      const price = data
+
+      if (!price || price <= 0) {
+        throw new Error(`Invalid price received: ${price}`)
+      }
+
+      KatanaLogger.info(PREFIX, `ETH price from API: $${price}`)
+      return price
+    } catch (error) {
+      KatanaLogger.error(PREFIX, `Failed to fetch ETH price (attempt ${attempt}/${MAX_RETRIES})`, error)
+
+      // If this is not the last attempt, wait and retry
+      if (attempt < MAX_RETRIES) {
+        KatanaLogger.info(PREFIX, `Waiting ${RETRY_DELAY_MS / 1000}s before retry...`)
+        await sleep(RETRY_DELAY_MS)
+      } else {
+        // Last attempt failed, use fallback
+        KatanaLogger.warn(PREFIX, `All ${MAX_RETRIES} attempts failed. Using fallback price: $${FALLBACK_PRICE}`)
+        return FALLBACK_PRICE
+      }
+    }
   }
+
+  // This should never be reached, but TypeScript requires a return
+  return FALLBACK_PRICE
 }
 
 /**
@@ -80,17 +69,5 @@ export function calculateUSDValue(
     return amount * ethPrice
   } else {
     throw new Error(`Unsupported token: ${tokenSymbol}`)
-  }
-}
-
-/**
- * Clear price cache (useful for testing or manual refresh)
- */
-export async function clearPriceCache(): Promise<void> {
-  try {
-    await redis.del(CACHE_KEY)
-    KatanaLogger.info(PREFIX, 'Price cache cleared')
-  } catch (error) {
-    KatanaLogger.error(PREFIX, 'Failed to clear price cache', error)
   }
 }
