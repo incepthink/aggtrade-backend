@@ -31,6 +31,8 @@ export function initializeCronJobs() {
   console.log('[Cron Jobs] All cron jobs initialized successfully\n')
 }
 
+initializeCronJobs()
+
 // Export individual cron starters
 export {
   startGridBotOrchestrator

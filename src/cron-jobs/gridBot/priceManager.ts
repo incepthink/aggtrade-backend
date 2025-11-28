@@ -5,7 +5,7 @@ const PREFIX = '[PriceManager]'
 
 const CACHE_KEY = 'grid_bot:eth_price'
 const CACHE_TTL = 30 // 30 seconds
-const FALLBACK_PRICE = 2000 // Fallback ETH price in USD
+const FALLBACK_PRICE = 3000 // Fallback ETH price in USD
 
 const ETH_ADDRESS = '0xEE7D8BCFb72bC1880D0Cf19822eB0A2e6577aB62'
 const CHAIN_ID = 747474 // Katana
@@ -24,7 +24,7 @@ export async function getCurrentETHPrice(): Promise<number> {
     }
 
     // 2. Fetch from Sushi API
-    const url = `https://api.sushi.com/price/v1/${CHAIN_ID}/${ETH_ADDRESS}`
+    const url = `https://api.sushi.com/price/v1/${CHAIN_ID}/${ETH_ADDRESS.toLowerCase()}`
     KatanaLogger.info(PREFIX, `Fetching ETH price from Sushi API: ${url}`)
 
     const response = await fetch(url)
