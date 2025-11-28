@@ -149,6 +149,9 @@ export async function placeOrder(params: OrderParams): Promise<any> {
     const orderId = `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
 
     // 10. Prepare data for both tables
+    // Convert wei to decimal-normalized values for database storage
+    const dstMinAmountDecimal = fromWei(dstMinAmountWei, toToken.decimals)
+
     const botOrderData = {
       execution_id: executionId,
       wallet_index: wallet.index,
@@ -165,7 +168,7 @@ export async function placeOrder(params: OrderParams): Promise<any> {
       src_amount: amount,
       dst_token_address: toToken.address,
       dst_token_symbol: toToken.symbol,
-      dst_min_amount: fromWei(dstMinAmountWei, toToken.decimals),
+      dst_min_amount: parseFloat(dstMinAmountDecimal).toFixed(toToken.decimals),
       filled_src_amount: '0',
       filled_dst_amount: '0',
       progress: 0,
