@@ -1,4 +1,4 @@
-import { constructSDK, TimeUnit } from '@orbs-network/twap-sdk'
+import { constructSDK, TimeUnit, type Order, OrderStatus } from '@orbs-network/twap-sdk'
 import { encodeFunctionData, createPublicClient, http } from 'viem'
 import { Address } from 'viem'
 import { TWAP_CONFIG, TWAP_CONTRACT_ADDRESS, KATANA_CHAIN_ID } from '../config/twap'
@@ -60,6 +60,27 @@ export interface LimitOrderTransaction {
   to: Address
   data: `0x${string}`
   value: string
+}
+
+/**
+ * Enhanced order type with status and fill delay
+ * This matches the frontend's TwapOrder type
+ */
+export interface TwapOrder extends Order {
+  status: OrderStatus
+  fillDelayMs: number
+  progress: number
+}
+
+/**
+ * Grouped orders by status
+ */
+export interface GroupedOrders {
+  ALL: TwapOrder[]
+  OPEN: TwapOrder[]
+  COMPLETED: TwapOrder[]
+  CANCELED: TwapOrder[]
+  EXPIRED: TwapOrder[]
 }
 
 /**
@@ -173,7 +194,7 @@ export class TwapService {
       srcChunkAmount: srcChunkAmount,
       deadline: deadline,
       fillDelay: sdkFillDelay,
-    })
+    }) as any
 
     console.log('[TWAP Service] SDK generated params:', sdkParams)
     console.log('[TWAP Service] SDK params breakdown:', {
@@ -197,18 +218,18 @@ export class TwapService {
     const encodedData = encodeFunctionData({
       abi: twapABI,
       functionName: 'ask',
-      args: [[
-        sdkParams[0],  // exchange (address)
-        sdkParams[1],  // srcToken (address)
-        sdkParams[2],  // dstToken (address)
-        sdkParams[3],  // srcAmount (uint256)
-        sdkParams[4],  // srcBidAmount (uint256)
-        sdkParams[5],  // dstMinAmount (uint256)
-        sdkParams[6],  // deadline (uint32)
-        sdkParams[7],  // bidDelay (uint32)
-        sdkParams[8],  // fillDelay (uint32)
-        dataField      // data (bytes)
-      ]]
+      args: [{
+        exchange: sdkParams[0] as `0x${string}`,
+        srcToken: sdkParams[1] as `0x${string}`,
+        dstToken: sdkParams[2] as `0x${string}`,
+        srcAmount: BigInt(sdkParams[3]),
+        srcBidAmount: BigInt(sdkParams[4]),
+        dstMinAmount: BigInt(sdkParams[5]),
+        deadline: Number(sdkParams[6]),
+        bidDelay: Number(sdkParams[7]),
+        fillDelay: Number(sdkParams[8]),
+        data: dataField as `0x${string}`
+      }]
     })
 
     const transaction: LimitOrderTransaction = {
@@ -220,5 +241,93 @@ export class TwapService {
     console.log('[TWAP Service] Transaction prepared:', transaction)
 
     return transaction
+  }
+
+  /**
+   * Calculate fill delay in milliseconds
+   * This is the exact logic from @orbs-network/twap-sdk's getOrderFillDelayMillis
+   */
+  private static calculateFillDelayMs(order: Order): number {
+    // fillDelay is in seconds from the contract
+    return order.fillDelay * 1000
+  }
+
+  /**
+   * Filter and sort orders by status
+   */
+  private static filterAndSortOrders(orders: TwapOrder[], status: OrderStatus): TwapOrder[] {
+    return orders
+      .filter((order) => order.status === status)
+      .sort((a, b) => b.createdAt - a.createdAt) // Most recent first
+  }
+
+  /**
+   * Fetch all limit orders for a wallet address
+   * This mimics the EXACT flow from useTwapOrders hook in the frontend
+   *
+   * Steps:
+   * 1. Call SDK's getOrders() method with wallet address
+   * 2. Enhance orders with status and fill delay
+   * 3. Group orders by status (ALL, OPEN, COMPLETED, CANCELED, EXPIRED)
+   *
+   * @param walletAddress - The wallet address to fetch orders for (0x...)
+   * @returns Grouped orders by status
+   */
+  static async fetchLimitOrders(walletAddress: string): Promise<GroupedOrders> {
+    console.log('🔍 Fetching limit orders for wallet:', walletAddress)
+
+    // Fetch orders from blockchain
+    console.log('📡 Fetching orders from blockchain...')
+    const rawOrders = await this.sdk.getOrders(walletAddress)
+    console.log(`✅ Found ${rawOrders.length} orders`)
+
+    // Enhance orders with metadata
+    console.log('🔧 Processing orders...')
+    const orders: TwapOrder[] = rawOrders.map((order) => {
+      const fillDelayMs = this.calculateFillDelayMs(order)
+      const progress = order.status === OrderStatus.Completed ? 100 : order.progress
+
+      return {
+        ...order,
+        status: order.status,
+        fillDelayMs,
+        progress,
+      }
+    })
+
+    // Group orders by status
+    const groupedOrders: GroupedOrders = {
+      ALL: orders,
+      OPEN: this.filterAndSortOrders(orders, OrderStatus.Open),
+      COMPLETED: this.filterAndSortOrders(orders, OrderStatus.Completed),
+      CANCELED: this.filterAndSortOrders(orders, OrderStatus.Canceled),
+      EXPIRED: this.filterAndSortOrders(orders, OrderStatus.Expired),
+    }
+
+    console.log('📊 Order Summary:')
+    console.log(`  Total Orders: ${groupedOrders.ALL.length}`)
+    console.log(`  Open: ${groupedOrders.OPEN.length}`)
+    console.log(`  Completed: ${groupedOrders.COMPLETED.length}`)
+    console.log(`  Canceled: ${groupedOrders.CANCELED.length}`)
+    console.log(`  Expired: ${groupedOrders.EXPIRED.length}`)
+
+    return groupedOrders
+  }
+
+  /**
+   * Fetch only open orders for a wallet
+   * Useful for monitoring active trades
+   */
+  static async fetchOpenOrders(walletAddress: string): Promise<TwapOrder[]> {
+    const groupedOrders = await this.fetchLimitOrders(walletAddress)
+    return groupedOrders.OPEN
+  }
+
+  /**
+   * Get specific order by ID
+   */
+  static async getOrderById(walletAddress: string, orderId: number): Promise<TwapOrder | undefined> {
+    const groupedOrders = await this.fetchLimitOrders(walletAddress)
+    return groupedOrders.ALL.find((order) => order.id === orderId)
   }
 }

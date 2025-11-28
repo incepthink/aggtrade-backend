@@ -63,9 +63,9 @@ interface LimitOrderParams {
   toToken: 'ETH' | 'USDC'
   fromAmount: string // Human-readable amount (e.g., "1.5")
   limitPrice: number // Price in toToken per fromToken
-  chunks: number
   fillDelayMinutes: number
   expiryHours: number
+  // Note: chunks is ALWAYS 1 for limit orders (hardcoded, matching frontend behavior)
 }
 
 interface PrepareLimitOrderRequest {
@@ -318,6 +318,10 @@ async function logLimitOrderPlacement(data: {
     wallet_index: data.wallet_index,
     wallet_address: data.wallet_address.toLowerCase(),
     order_id: String(data.order_id),
+    blockchain_order_id: null,
+    parent_order_id: null,
+    order_type: data.wallet_index === 1 ? 'counter_buy' : 'counter_sell', // Infer from wallet index
+    grid_offset_percent: null,
     tx_hash: data.tx_hash,
     chain_id: data.chain_id || 747474,
     src_token_address: data.src_token_address.toLowerCase(),
@@ -326,6 +330,7 @@ async function logLimitOrderPlacement(data: {
     dst_token_address: data.dst_token_address.toLowerCase(),
     dst_token_symbol: data.dst_token_symbol,
     dst_min_amount: String(data.dst_min_amount),
+    execution_price: null,
     filled_src_amount: '0',
     filled_dst_amount: '0',
     progress: 0,
@@ -391,6 +396,10 @@ async function createLimitOrder(
 
     console.log('\n[Calculations] Computing trade amounts...')
 
+    // IMPORTANT: Chunks must ALWAYS be 1 for limit orders (matching frontend behavior)
+    // This ensures the order is a true limit order, not a DCA order
+    const chunks = 1
+
     const srcAmountWei = toWei(params.fromAmount, fromToken.decimals)
     console.log(`  Source amount: ${srcAmountWei} wei (${params.fromAmount} ${fromToken.symbol})`)
 
@@ -405,9 +414,10 @@ async function createLimitOrder(
     const dstMinAmountWei = calculateMinAmountOut(expectedOutputWei, 0.1)
     console.log(`  Min output (0.1% slippage): ${dstMinAmountWei} wei (${fromWei(dstMinAmountWei, toToken.decimals)} ${toToken.symbol})`)
 
-    const srcChunkAmountWei = calculateChunkAmount(srcAmountWei, params.chunks)
+    // For limit orders: srcChunkAmount = srcAmount (because chunks = 1)
+    const srcChunkAmountWei = srcAmountWei
     console.log(`  Chunk amount: ${srcChunkAmountWei} wei (${fromWei(srcChunkAmountWei, fromToken.decimals)} ${fromToken.symbol})`)
-    console.log(`  Total chunks: ${params.chunks}`)
+    console.log(`  Total chunks: ${chunks} (hardcoded for limit orders)`)
 
     const deadline = calculateDeadline(params.expiryHours)
     console.log(`  Deadline: ${new Date(deadline * 1000).toISOString()} (${params.expiryHours}h from now)`)
@@ -515,6 +525,10 @@ async function createLimitOrder(
 
     const orderId = txResponse.hash // Use tx hash as order ID for now
 
+    // Convert wei values to decimal-normalized values for database storage
+    const srcAmountDecimal = fromWei(srcAmountWei, fromToken.decimals)
+    const dstMinAmountDecimal = fromWei(dstMinAmountWei, toToken.decimals)
+
     await logLimitOrderPlacement({
       execution_id: executionId,
       wallet_index: wallet.index,
@@ -524,10 +538,10 @@ async function createLimitOrder(
       chain_id: CHAIN_ID,
       src_token_address: fromToken.address,
       src_token_symbol: fromToken.symbol,
-      src_amount: srcAmountWei,
+      src_amount: srcAmountDecimal,
       dst_token_address: toToken.address,
       dst_token_symbol: toToken.symbol,
-      dst_min_amount: dstMinAmountWei,
+      dst_min_amount: dstMinAmountDecimal,
       deadline: deadline
     })
 
@@ -752,7 +766,6 @@ export function startLimitOrderBotCron(): void {
   //     toToken: 'USDC',
   //     fromAmount: '0.1',
   //     limitPrice: 2100,
-  //     chunks: 5,
   //     fillDelayMinutes: 30,
   //     expiryHours: 24
   //   }

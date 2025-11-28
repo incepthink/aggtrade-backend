@@ -18,7 +18,8 @@ import {
   calculateDeadline,
   generateExecutionId,
   sleep,
-  calculateUSDVolume
+  calculateUSDVolume,
+  formatOrder
 } from './utils/botHelpers'
 
 // Import services and models directly
@@ -26,6 +27,8 @@ import { TwapService } from '../services/twap'
 import BotExecution from '../models/BotExecution'
 import BotWalletExecution from '../models/BotWalletExecution'
 import BotLimitOrder from '../models/BotLimitOrder'
+import SushiswapActivity from '../models/SushiswapActivity'
+import User from '../models/User'
 
 const RPC_URL = 'https://rpc.katana.network'
 const CHAIN_ID = 747474
@@ -52,9 +55,9 @@ interface LimitOrderParams {
   toToken: 'ETH' | 'USDC'
   fromAmount: string
   limitPrice: number
-  chunks: number
   fillDelayMinutes: number
   expiryHours: number
+  // Note: chunks is ALWAYS 1 for limit orders (hardcoded, matching frontend behavior)
 }
 
 /**
@@ -124,6 +127,70 @@ export async function runImmediately() {
       throw new Error('Need at least 2 wallets! Add WALLET_1 and WALLET_2 to .env')
     }
 
+    // ============================================================================
+    // TESTING: Fetch existing limit orders for both wallets
+    // ============================================================================
+    console.log('\n')
+    console.log('╔' + '═'.repeat(78) + '╗')
+    console.log('║' + ' '.repeat(22) + 'FETCHING EXISTING ORDERS' + ' '.repeat(31) + '║')
+    console.log('╚' + '═'.repeat(78) + '╝\n')
+
+    // Fetch orders for Wallet 1
+    console.log(`\n[Wallet 1] ${wallets[0].address}`)
+    try {
+      const wallet1Orders = await TwapService.fetchLimitOrders(wallets[0].address)
+
+      if (wallet1Orders.ALL.length === 0) {
+        console.log('  No orders found for this wallet.')
+      } else {
+        console.log(`\n  📋 All Orders (${wallet1Orders.ALL.length}):`)
+        wallet1Orders.ALL.forEach((order) => {
+          console.log('\n' + formatOrder(order))
+        })
+
+        if (wallet1Orders.OPEN.length > 0) {
+          console.log(`\n  🔓 Open Orders (${wallet1Orders.OPEN.length}):`)
+          wallet1Orders.OPEN.forEach((order) => {
+            console.log(`    - Order #${order.id}: ${order.progress}% complete`)
+          })
+        }
+      }
+    } catch (error: any) {
+      console.error(`  ❌ Error fetching orders: ${error.message}`)
+    }
+
+    // Fetch orders for Wallet 2
+    console.log(`\n\n[Wallet 2] ${wallets[1].address}`)
+    try {
+      const wallet2Orders = await TwapService.fetchLimitOrders(wallets[1].address)
+
+      if (wallet2Orders.ALL.length === 0) {
+        console.log('  No orders found for this wallet.')
+      } else {
+        console.log(`\n  📋 All Orders (${wallet2Orders.ALL.length}):`)
+        wallet2Orders.ALL.forEach((order) => {
+          console.log('\n' + formatOrder(order))
+        })
+
+        if (wallet2Orders.OPEN.length > 0) {
+          console.log(`\n  🔓 Open Orders (${wallet2Orders.OPEN.length}):`)
+          wallet2Orders.OPEN.forEach((order) => {
+            console.log(`    - Order #${order.id}: ${order.progress}% complete`)
+          })
+        }
+      }
+    } catch (error: any) {
+      console.error(`  ❌ Error fetching orders: ${error.message}`)
+    }
+
+    console.log('\n')
+    console.log('╔' + '═'.repeat(78) + '╗')
+    console.log('║' + ' '.repeat(22) + 'PLACING NEW ORDERS' + ' '.repeat(37) + '║')
+    console.log('╚' + '═'.repeat(78) + '╝\n')
+    // ============================================================================
+    // END TESTING
+    // ============================================================================
+
     // Create execution
     await BotExecution.create({
       execution_id: executionId,
@@ -146,7 +213,6 @@ export async function runImmediately() {
       toToken: 'ETH',
       fromAmount: usdAmount.toFixed(2),
       limitPrice: 1 / buyPrice,
-      chunks: 5,
       fillDelayMinutes: 3,
       expiryHours: 24
     }
@@ -164,7 +230,6 @@ export async function runImmediately() {
       toToken: 'USDC',
       fromAmount: ethAmount.toFixed(6),
       limitPrice: sellPrice,
-      chunks: 5,
       fillDelayMinutes: 3,
       expiryHours: 24
     }
@@ -208,6 +273,9 @@ async function executeOrder(
     })
 
     // Calculate amounts
+    // IMPORTANT: Chunks must ALWAYS be 1 for limit orders (matching frontend behavior)
+    const chunks = 1
+
     const srcAmountWei = toWei(params.fromAmount, fromToken.decimals)
     const expectedOutputWei = calculateOutputAmount(
       params.fromAmount,
@@ -216,12 +284,13 @@ async function executeOrder(
       toToken.decimals
     )
     const dstMinAmountWei = calculateMinAmountOut(expectedOutputWei, 0.1)
-    const srcChunkAmountWei = calculateChunkAmount(srcAmountWei, params.chunks)
+    // For limit orders: srcChunkAmount = srcAmount (because chunks = 1)
+    const srcChunkAmountWei = srcAmountWei
     const deadline = calculateDeadline(params.expiryHours)
 
     console.log(`  From: ${params.fromAmount} ${fromToken.symbol}`)
     console.log(`  To: ~${fromWei(expectedOutputWei, toToken.decimals)} ${toToken.symbol}`)
-    console.log(`  Chunks: ${params.chunks}, Delay: ${params.fillDelayMinutes}min`)
+    console.log(`  Chunks: ${chunks} (hardcoded for limit orders), Delay: ${params.fillDelayMinutes}min`)
 
     // Check balance
     const balance = await getTokenBalance(provider, fromToken.address, wallet.address, false)
@@ -255,8 +324,28 @@ async function executeOrder(
     const receipt = await txResponse.wait()
     console.log(`  ✓ Confirmed in block ${receipt?.blockNumber}`)
 
-    // Log order
+    // Convert wei values to decimal-normalized values for database storage
+    const srcAmountDecimal = fromWei(srcAmountWei, fromToken.decimals)
+    const dstMinAmountDecimal = fromWei(dstMinAmountWei, toToken.decimals)
+
+    // Get or create user for SushiswapActivity
+    const [user] = await User.findOrCreate({
+      where: { wallet_address: wallet.address.toLowerCase() },
+      defaults: {
+        wallet_address: wallet.address.toLowerCase(),
+        chain_id: CHAIN_ID,
+        is_active: true,
+        token_addresses: [],
+        last_balance_check: null
+      }
+    })
+
+    // Calculate execution price
+    const executionPrice = parseFloat(dstMinAmountDecimal) / parseFloat(srcAmountDecimal)
+
+    // Log order to BotLimitOrder
     await BotLimitOrder.create({
+      order_type: type === 'buy' ? 'counter_buy' : 'counter_sell',
       execution_id: executionId,
       wallet_index: wallet.index,
       wallet_address: wallet.address.toLowerCase(),
@@ -265,10 +354,10 @@ async function executeOrder(
       chain_id: CHAIN_ID,
       src_token_address: fromToken.address.toLowerCase(),
       src_token_symbol: fromToken.symbol,
-      src_amount: srcAmountWei,
+      src_amount: srcAmountDecimal,
       dst_token_address: toToken.address.toLowerCase(),
       dst_token_symbol: toToken.symbol,
-      dst_min_amount: dstMinAmountWei,
+      dst_min_amount: dstMinAmountDecimal,
       filled_src_amount: '0',
       filled_dst_amount: '0',
       progress: 0,
@@ -278,6 +367,36 @@ async function executeOrder(
       filled_at: null,
       deadline: deadline,
       metadata: null
+    })
+
+    // Log order to SushiswapActivity
+    await SushiswapActivity.create({
+      user_id: user.id,
+      wallet_address: wallet.address.toLowerCase(),
+      swap_type: 'LIMIT_ORDER',
+      tx_hash: txResponse.hash,
+      chain_id: CHAIN_ID,
+      block_number: receipt?.blockNumber || null,
+      block_timestamp: null,
+      token_from_address: fromToken.address.toLowerCase(),
+      token_from_symbol: fromToken.symbol,
+      token_from_amount: srcAmountDecimal,
+      token_to_address: toToken.address.toLowerCase(),
+      token_to_symbol: toToken.symbol,
+      token_to_amount: dstMinAmountDecimal,
+      usd_volume: 0,
+      execution_price: executionPrice,
+      pool_id: null,
+      order_id: txResponse.hash,
+      filled_src_amount: '0',
+      filled_dst_amount: '0',
+      is_partial_fill: false,
+      progress: 0,
+      status: 'pending',
+      metadata: {
+        deadline: deadline
+      },
+      timestamp: new Date()
     })
 
     // Complete wallet execution

@@ -3,7 +3,7 @@ import BotLimitOrder from "../../models/BotLimitOrder"
 import BotExecution from "../../models/BotExecution"
 
 interface PlaceLimitOrderRequest {
-  execution_id: number
+  execution_id: string
   wallet_index: number
   wallet_address: string
   order_id: string
@@ -17,6 +17,7 @@ interface PlaceLimitOrderRequest {
   dst_min_amount: string
   deadline?: number
   placed_at?: string
+  order_type?: 'grid_buy' | 'grid_sell' | 'counter_buy' | 'counter_sell'
 }
 
 interface UpdateFilledRequest {
@@ -46,7 +47,7 @@ export const placeLimitOrder = async (req: Request, res: Response, next: NextFun
 
     // Verify execution exists
     const execution = await BotExecution.findOne({
-      where: { id: data.execution_id }
+      where: { execution_id: data.execution_id }
     })
 
     if (!execution) {
@@ -61,6 +62,10 @@ export const placeLimitOrder = async (req: Request, res: Response, next: NextFun
       wallet_index: data.wallet_index,
       wallet_address: data.wallet_address.toLowerCase(),
       order_id: String(data.order_id),
+      blockchain_order_id: null,
+      parent_order_id: null,
+      order_type: data.order_type || (data.wallet_index === 1 ? 'counter_buy' : 'counter_sell'),
+      grid_offset_percent: null,
       tx_hash: data.tx_hash,
       chain_id: data.chain_id || 747474,
       src_token_address: data.src_token_address.toLowerCase(),
@@ -69,6 +74,7 @@ export const placeLimitOrder = async (req: Request, res: Response, next: NextFun
       dst_token_address: data.dst_token_address.toLowerCase(),
       dst_token_symbol: data.dst_token_symbol,
       dst_min_amount: String(data.dst_min_amount),
+      execution_price: null,
       filled_src_amount: '0',
       filled_dst_amount: '0',
       progress: 0,

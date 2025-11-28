@@ -78,7 +78,7 @@ export function calculateDeadline(expiryHours: number): number {
 export function generateExecutionId(): string {
   const timestamp = Date.now()
   const random = Math.floor(Math.random() * 1000)
-  return `exec_${timestamp}_${random}`
+  return `${timestamp}_${random}`
 }
 
 /**
@@ -122,4 +122,53 @@ export async function calculateUSDVolume(
 
   const amount = parseFloat(fromWei(amountWei, decimals))
   return amount * price
+}
+
+/**
+ * Format fill delay to human-readable text
+ */
+export function formatFillDelay(fillDelayMs: number): string {
+  const seconds = Math.floor(fillDelayMs / 1000)
+  const minutes = Math.floor(seconds / 60)
+  const hours = Math.floor(minutes / 60)
+  const days = Math.floor(hours / 24)
+
+  if (days > 0) {
+    return `${days} day${days > 1 ? 's' : ''}`
+  }
+  if (hours > 0) {
+    return `${hours} hour${hours > 1 ? 's' : ''}`
+  }
+  if (minutes > 0) {
+    return `${minutes} minute${minutes > 1 ? 's' : ''}`
+  }
+  return `${seconds} second${seconds !== 1 ? 's' : ''}`
+}
+
+/**
+ * Format order for display
+ */
+export function formatOrder(order: any): string {
+  const date = new Date(order.createdAt).toISOString()
+  const deadline = new Date(order.deadline).toISOString()
+  const fillDelayText = formatFillDelay(order.fillDelayMs)
+
+  return `
+Order #${order.id}
+  Status: ${order.status}
+  Progress: ${order.progress}%
+  From: ${order.srcTokenAddress}
+  To: ${order.dstTokenAddress}
+  Amount In: ${order.srcAmount} (smallest unit)
+  Amount Per Chunk: ${order.srcAmountPerChunk} (smallest unit)
+  Min Amount Out Per Chunk: ${order.dstMinAmountPerChunk} (smallest unit)
+  Filled Src Amount: ${order.filledSrcAmount} (smallest unit)
+  Filled Dst Amount: ${order.filledDstAmount} (smallest unit)
+  Chunks: ${order.chunks}
+  Fill Delay: ${fillDelayText}
+  Created: ${date}
+  Deadline: ${deadline}
+  Maker: ${order.maker}
+  Transaction: ${order.txHash}
+  `.trim()
 }
