@@ -26,17 +26,20 @@ export function fromWei(wei: string, decimals: number): string {
  * Example: if limitPrice = 2000, then 1 ETH = 2000 USDC
  */
 export function calculateOutputAmount(
-  inputAmount: string,
+  inputAmountWei: string,
   limitPrice: number,
   inputDecimals: number,
   outputDecimals: number
 ): string {
-  const inputAmountNumber = parseFloat(inputAmount)
-  const outputAmountNumber = inputAmountNumber * limitPrice
+  // Step 1: Convert input WEI to human-readable amount
+  const inputHuman = parseFloat(inputAmountWei) / Math.pow(10, inputDecimals)
 
-  // Convert to Wei
+  // Step 2: Calculate output in human-readable amount
+  const outputHuman = inputHuman * limitPrice
+
+  // Step 3: Convert output to WEI
   const outputAmountWei = BigInt(
-    Math.floor(outputAmountNumber * Math.pow(10, outputDecimals))
+    Math.floor(outputHuman * Math.pow(10, outputDecimals))
   )
 
   return outputAmountWei.toString()

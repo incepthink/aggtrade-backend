@@ -133,7 +133,12 @@ async function placeCounterOrder(
     const toToken = isParentBuyOrder ? USDC : ETH
     const counterOrderType = isParentBuyOrder ? 'counter_sell' : 'counter_buy'
 
-    KatanaLogger.info(PREFIX, 
+    // Calculate limit price based on order direction
+    // For SELL (ETH → USDC): limitPrice = USDC per 1 ETH (use counterPrice as-is)
+    // For BUY (USDC → ETH): limitPrice = ETH per 1 USDC (use 1/counterPrice)
+    const limitPrice = isParentBuyOrder ? counterPrice : (1 / counterPrice)
+
+    KatanaLogger.info(PREFIX,
       `[Wallet ${wallet.index}] Placing ${counterOrderType}: ${counterAmountStr} ${fromToken.symbol} → ${toToken.symbol} @ $${counterPrice.toFixed(2)}`
     )
 
@@ -144,7 +149,7 @@ async function placeCounterOrder(
       fromToken,
       toToken,
       amount: counterAmountStr,
-      limitPrice: counterPrice,
+      limitPrice,
       orderType: counterOrderType as any,
       parentOrderId: parentOrder.order_id,
       gridOffset: null // Counter-orders don't have grid offset

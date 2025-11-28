@@ -110,11 +110,14 @@ export async function placeGrid(wallet: BotWallet, executionId: string): Promise
 
     for (const offset of GRID_CONFIG.BUY_OFFSETS) {
       try {
-        const limitPrice = ethPrice * (1 + offset / 100)
+        const targetEthPrice = ethPrice * (1 + offset / 100)
+        // For BUY orders (USDC → ETH): limitPrice = how much ETH per 1 USDC
+        // If 1 ETH = $2970, then 1 USDC = 1/2970 ETH = 0.000336 ETH
+        const limitPrice = 1 / targetEthPrice
         const orderType = 'grid_buy'
 
-        KatanaLogger.info(PREFIX, 
-          `[Wallet ${wallet.index}] Placing BUY order: ${usdcPerOrder} USDC @ $${limitPrice.toFixed(2)} (${offset}%)`
+        KatanaLogger.info(PREFIX,
+          `[Wallet ${wallet.index}] Placing BUY order: ${usdcPerOrder} USDC @ $${targetEthPrice.toFixed(2)} (${offset}%)`
         )
 
         await placeOrder({
