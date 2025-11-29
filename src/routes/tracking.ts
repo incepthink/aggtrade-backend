@@ -3,7 +3,8 @@ import {
   logClassicSwap,
   getUserVolume,
   getUserSwapHistory,
-  getSwapByTxHash
+  getSwapByTxHash,
+  streamSwaps
 } from '../controllers/tracking/sushiswapClassicSwap'
 import {
   syncLimitOrders
@@ -39,6 +40,7 @@ router.get('/sushiswap/dashboard/top-wallets', getTopWallets)
 
 // SushiSwap Classic Swap endpoints
 router.post('/sushiswap/classic-swap', logClassicSwap)
+router.get('/sushiswap/stream', streamSwaps)
 router.get('/sushiswap/user/:walletAddress/volume', getUserVolume)
 router.get('/sushiswap/user/:walletAddress/history', getUserSwapHistory)
 router.get('/sushiswap/tx/:txHash', getSwapByTxHash)

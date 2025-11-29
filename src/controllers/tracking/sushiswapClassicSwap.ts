@@ -1,6 +1,10 @@
 import type { Request, Response, NextFunction } from "express"
 import SushiswapActivity from "../../models/SushiswapActivity"
 import User from "../../models/User"
+import Token from "../../models/Token"
+
+// SSE clients manager
+const sseClients = new Set<Response>()
 
 interface ClassicSwapRequest {
   walletAddress: string
@@ -96,6 +100,9 @@ export const logClassicSwap = async (req: Request, res: Response, next: NextFunc
       },
       timestamp: data.timestamp ? new Date(data.timestamp) : new Date()
     })
+    
+    // Broadcast to SSE clients
+    broadcastNewSwap(activity)
 
     return res.status(201).json({
       message: 'Classic swap logged successfully',
@@ -207,5 +214,72 @@ export const getSwapByTxHash = async (req: Request, res: Response, next: NextFun
 
   } catch (error) {
     next(error)
+  }
+}
+
+/**
+ * GET /tracking/sushiswap/stream
+ * SSE endpoint for real-time swap updates
+ */
+export const streamSwaps = (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+
+  sseClients.add(res)
+
+  req.on('close', () => {
+    sseClients.delete(res)
+  })
+}
+
+/**
+ * Broadcast new swap to all SSE clients
+ */
+export const broadcastNewSwap = async (activity: SushiswapActivity) => {
+  try {
+    const tokenFromLookup = activity.token_from_address === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+    ? '0xee7d8bcfb72bc1880d0cf19822eb0a2e6577ab62'
+    : activity.token_from_address
+  const tokenToLookup = activity.token_to_address === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+    ? '0xee7d8bcfb72bc1880d0cf19822eb0a2e6577ab62'
+    : activity.token_to_address
+
+  const tokens = await Token.findAll({
+    where: {
+      address: [tokenFromLookup, tokenToLookup]
+    },
+    attributes: ['address', 'logo_uri'],
+    raw: true
+  })
+
+  const logoMap = new Map(tokens.map((t: any) => [t.address, t.logo_uri]))
+
+  const swapData = {
+    id: activity.id,
+    wallet_address: activity.wallet_address,
+    swap_type: activity.swap_type,
+    token_from_address: activity.token_from_address,
+    token_from_amount: activity.token_from_amount,
+    token_from_symbol: activity.token_from_symbol,
+    token_from_logo: logoMap.get(tokenFromLookup) || null,
+    token_to_address: activity.token_to_address,
+    token_to_amount: activity.token_to_amount,
+    token_to_symbol: activity.token_to_symbol,
+    token_to_logo: logoMap.get(tokenToLookup) || null,
+    usd_volume: activity.usd_volume.toString(),
+    timestamp: activity.timestamp.toISOString(),
+    status: activity.status,
+    filled_src_amount: activity.filled_src_amount,
+    filled_dst_amount: activity.filled_dst_amount,
+    is_partial_fill: activity.is_partial_fill
+  }
+  console.log(swapData);
+  
+
+  const message = `data: ${JSON.stringify(swapData)}\n\n`
+  sseClients.forEach(client => client.write(message))
+  } catch (error) {
+    console.log("broadcastNewSwap", error); 
   }
 }
