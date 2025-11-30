@@ -144,3 +144,56 @@ export function getPoolsWithMetricsQuery(): string {
     }
   `;
 }
+
+/**
+ * Get GraphQL query for fetching complete swap entities with all fields
+ * Used for backfilling SushiswapActivity table with real swap data
+ */
+export function getFullSwapsQuery(): string {
+  return `
+    query GetFullSwaps($poolId: String!, $startTime: Int!, $endTime: Int!, $first: Int!, $skip: Int!) {
+      swaps(
+        where: { pool: $poolId, timestamp_gte: $startTime, timestamp_lte: $endTime }
+        orderBy: timestamp
+        orderDirection: desc
+        first: $first
+        skip: $skip
+      ) {
+        id
+        timestamp
+        transaction {
+          id
+          blockNumber
+        }
+        pool {
+          id
+        }
+        token0 {
+          id
+          symbol
+          name
+          decimals
+        }
+        token1 {
+          id
+          symbol
+          name
+          decimals
+        }
+        sender
+        recipient
+        origin
+        amount0
+        amount1
+        amount0USD
+        amount1USD
+        amountUSD
+        token0PriceUSD
+        token1PriceUSD
+        sqrtPriceX96
+        tick
+        logIndex
+      }
+    }
+  `;
+}

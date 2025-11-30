@@ -30,6 +30,47 @@ export interface SwapData {
 }
 
 /**
+ * Full swap data from SushiSwap subgraph with all fields
+ * Used for backfilling SushiswapActivity table
+ */
+export interface FullSwapData {
+  id: string;
+  timestamp: string;
+  transaction: {
+    id: string;
+    blockNumber: string;
+  };
+  pool: {
+    id: string;
+  };
+  token0: {
+    id: string;
+    symbol: string;
+    name: string;
+    decimals: string;
+  };
+  token1: {
+    id: string;
+    symbol: string;
+    name: string;
+    decimals: string;
+  };
+  sender: string;
+  recipient: string;
+  origin: string;
+  amount0: string;
+  amount1: string;
+  amount0USD: string;
+  amount1USD: string;
+  amountUSD: string;
+  token0PriceUSD: string;
+  token1PriceUSD: string;
+  sqrtPriceX96: string;
+  tick: string;
+  logIndex: string;
+}
+
+/**
  * Pool information from SushiSwap subgraph
  */
 export interface Pool {
@@ -144,7 +185,7 @@ export interface MySQLSwapResult {
  */
 export interface SushiGraphResponse {
   data: {
-    swaps?: SwapData[];
+    swaps?: SwapData[] | FullSwapData[];
     pools?: Pool[] | PoolWithMetrics[]; // Support both Pool and PoolWithMetrics
   };
   errors?: any[];

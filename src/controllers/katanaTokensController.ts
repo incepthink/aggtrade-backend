@@ -54,7 +54,7 @@ export interface ProcessedToken {
 // Constants
 // -----------------------------
 const KATANA_SUBGRAPH_URL =
-  "https://api.studio.thegraph.com/query/106601/sushi-v-3-katana/version/latest";
+  "https://api.studio.thegraph.com/query/106601/sushi-v-3-katana-2/version/latest";
 const KATANA_CHAIN_ID = 747474;
 
 // -----------------------------
