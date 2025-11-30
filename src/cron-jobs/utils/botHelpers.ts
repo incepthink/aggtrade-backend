@@ -67,12 +67,13 @@ export function calculateChunkAmount(totalAmount: string, chunks: number): strin
 }
 
 /**
- * Calculate order deadline timestamp (Unix milliseconds)
+ * Calculate order deadline timestamp (Unix seconds)
+ * IMPORTANT: TWAP contract expects deadline in SECONDS, not milliseconds
  */
 export function calculateDeadline(expiryHours: number): number {
-  const now = Date.now() // Milliseconds
-  const expiryMilliseconds = expiryHours * 60 * 60 * 1000
-  return now + expiryMilliseconds
+  const nowSeconds = Math.floor(Date.now() / 1000) // Convert to seconds
+  const expirySeconds = expiryHours * 60 * 60
+  return nowSeconds + expirySeconds
 }
 
 /**

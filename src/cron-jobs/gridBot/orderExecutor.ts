@@ -51,7 +51,7 @@ export async function placeOrder(params: OrderParams): Promise<any> {
       toToken.decimals
     )
     const dstMinAmountWei = calculateMinAmountOut(expectedOutputWei, 0.1) // 0.1% slippage
-    const deadline = calculateDeadline(24) // 24 hours expiry
+    const deadline = calculateDeadline(168) // 1 week (168 hours) expiry
 
     KatanaLogger.info(
       PREFIX,
