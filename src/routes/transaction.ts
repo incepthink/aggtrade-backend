@@ -10,6 +10,12 @@ import {
 import {
   prepareLimitOrder
 } from "../controllers/transaction/twap"
+import {
+  prepareMorphoWithdraw,
+  prepareMorphoDeposit,
+  prepareMorphoBorrow,
+  prepareMorphoRepay
+} from "../controllers/transaction/morpho"
 
 const router = Router()
 
@@ -23,5 +29,11 @@ router.post("/yearn/withdraw/prepare", prepareYearnWithdraw)
 
 // TWAP (Orbs) Limit Orders endpoints
 router.post("/twap/limit-order/prepare", prepareLimitOrder)
+
+// Morpho Blue endpoints
+router.post("/morpho/withdraw/prepare", prepareMorphoWithdraw)
+router.post("/morpho/deposit/prepare", prepareMorphoDeposit)
+router.post("/morpho/borrow/prepare", prepareMorphoBorrow)
+router.post("/morpho/repay/prepare", prepareMorphoRepay)
 
 export default router
