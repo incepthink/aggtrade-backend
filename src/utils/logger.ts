@@ -99,12 +99,24 @@ export class KatanaLogger {
   }
 
   static error(prefix: string, message: string, error?: any, data?: any): void {
-    const errorInfo = error ? {
-      error: this.sanitizeError(error),
-      ...data
-    } : data;
+    const timestamp = new Date().toISOString();
+    const baseMessage = `${timestamp} ${prefix} ${message}`;
 
-    console.error(this.formatMessage(prefix, message, errorInfo));
+    if (error) {
+      const sanitizedError = this.sanitizeError(error);
+      const sanitizedData = data ? this.sanitizeData(data) : undefined;
+
+      // Log error details directly without depth limiting
+      if (sanitizedData) {
+        console.error(`${baseMessage} ${JSON.stringify({ error: sanitizedError, data: sanitizedData })}`);
+      } else {
+        console.error(`${baseMessage} ${JSON.stringify({ error: sanitizedError })}`);
+      }
+    } else if (data) {
+      console.error(this.formatMessage(prefix, message, data));
+    } else {
+      console.error(baseMessage);
+    }
   }
 
   static debug(prefix: string, message: string, data?: any): void {
