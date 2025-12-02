@@ -40,8 +40,8 @@ export async function startWalletMonitor(
       KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] No pending orders found on startup`)
     }
 
-    // 0.5 Place counter orders for all historical filled orders from Nov 30 that don't have counter orders
-    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Checking for historical orders from Nov 30 needing counter orders...`)
+    // 0.5 Place counter orders for all historical filled orders from December 3 that don't have counter orders
+    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Checking for historical orders from December 3 needing counter orders...`)
     await placeHistoricalCounterOrders(wallet, executionId)
 
     // 1. Place initial grid (if not already placed)

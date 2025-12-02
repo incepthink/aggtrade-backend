@@ -190,13 +190,33 @@ async function _pollOrderStatusInternal(
           filledDstAmount: blockchainOrder.filledDstAmount
         })
       } else if (blockchainOrder.progress !== dbOrder.progress) {
-        // Progress changed but status same (partial fill progress update)
-        KatanaLogger.info(PREFIX, 
+        // Progress changed - recalculate status in case progress reached 100%
+        const recalculatedStatus = mapBlockchainStatus(blockchainOrder.status, blockchainOrder.progress)
+
+        KatanaLogger.info(PREFIX,
           `[Wallet ${wallet.index}] Progress update: ${dbOrder.order_id} ` +
           `${dbOrder.progress}% -> ${blockchainOrder.progress}%`
         )
 
-        await syncOrderStatus(dbOrder, blockchainOrder, dbOrder.status)
+        await syncOrderStatus(dbOrder, blockchainOrder, recalculatedStatus)
+
+        // If status changed due to progress reaching 100%, add to updates
+        if (recalculatedStatus !== dbOrder.status) {
+          KatanaLogger.info(PREFIX,
+            `[Wallet ${wallet.index}] Status auto-updated from progress: ${dbOrder.order_id} ` +
+            `${dbOrder.status} -> ${recalculatedStatus} (${blockchainOrder.progress}%)`
+          )
+
+          updates.push({
+            dbOrderId: dbOrder.id,
+            blockchainOrderId: blockchainOrder.id,
+            oldStatus: dbOrder.status,
+            newStatus: recalculatedStatus,
+            progress: blockchainOrder.progress,
+            filledSrcAmount: blockchainOrder.filledSrcAmount,
+            filledDstAmount: blockchainOrder.filledDstAmount
+          })
+        }
       }
     } catch (error) {
       KatanaLogger.error(PREFIX, 

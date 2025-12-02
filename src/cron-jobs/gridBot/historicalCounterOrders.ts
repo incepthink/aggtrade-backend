@@ -8,19 +8,19 @@ import { KatanaLogger } from '../../utils/logger'
 const PREFIX = '[HistoricalCounterOrders]'
 
 /**
- * Place counter orders for all COMPLETED orders from Nov 30, 2025
+ * Place counter orders for all COMPLETED orders from December 3, 2025
  * fetched from TWAP SDK that don't already have counter orders
  */
 export async function placeHistoricalCounterOrders(
   wallet: BotWallet,
   executionId: string
 ): Promise<void> {
-  KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Fetching COMPLETED orders from TWAP SDK for Nov 30...`)
+  KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Fetching COMPLETED orders from TWAP SDK for December 3...`)
 
   try {
-    // Define Nov 30, 2025 date range (UTC) - in milliseconds for comparison with createdAt
-    const startDate = new Date('2025-11-30T00:00:00.000Z').getTime()
-    const endDate = new Date('2025-11-30T23:59:59.999Z').getTime()
+    // Define December 3, 2025 date range (UTC) - in milliseconds for comparison with createdAt
+    const startDate = new Date('2025-12-03T00:00:00.000Z').getTime()
+    const endDate = new Date('2025-12-03T23:59:59.999Z').getTime()
 
     KatanaLogger.info(PREFIX,
       `[Wallet ${wallet.index}] Searching for orders between ${new Date(startDate).toISOString()} and ${new Date(endDate).toISOString()}`
@@ -40,12 +40,12 @@ export async function placeHistoricalCounterOrders(
     })
 
     if (nov30CompletedOrders.length === 0) {
-      KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] No COMPLETED orders found from Nov 30 on blockchain`)
+      KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] No COMPLETED orders found from December 3 on blockchain`)
       return
     }
 
     KatanaLogger.info(PREFIX,
-      `[Wallet ${wallet.index}] Found ${nov30CompletedOrders.length} COMPLETED orders from Nov 30 on blockchain`
+      `[Wallet ${wallet.index}] Found ${nov30CompletedOrders.length} COMPLETED orders from December 3 on blockchain`
     )
 
     // For each blockchain order, check if it exists in our database and needs a counter order
