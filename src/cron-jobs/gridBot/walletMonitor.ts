@@ -2,6 +2,7 @@ import { BotWallet } from './types'
 import { pollOrderStatus, getFullyFilledOrders } from './orderStatusPoller'
 import { processFilledOrders } from './counterOrderManager'
 import { placeGrid } from './gridManager'
+import { placeHistoricalCounterOrders } from './historicalCounterOrders'
 import { KatanaLogger } from '../../utils/logger'
 
 const PREFIX = '[WalletMonitor]'
@@ -38,6 +39,10 @@ export async function startWalletMonitor(
     } else {
       KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] No pending orders found on startup`)
     }
+
+    // 0.5 Place counter orders for all historical filled orders from Nov 30 that don't have counter orders
+    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Checking for historical orders from Nov 30 needing counter orders...`)
+    await placeHistoricalCounterOrders(wallet, executionId)
 
     // 1. Place initial grid (if not already placed)
     KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Checking/placing initial grid...`)
