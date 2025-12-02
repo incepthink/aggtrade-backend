@@ -19,7 +19,7 @@ export async function placeHistoricalCounterOrders(
 
   try {
     // Define December 3, 2025 date range (UTC) - in milliseconds for comparison with createdAt
-    const startDate = new Date('2025-12-03T00:00:00.000Z').getTime()
+    const startDate = new Date('2025-12-02T00:00:00.000Z').getTime()
     const endDate = new Date('2025-12-03T23:59:59.999Z').getTime()
 
     KatanaLogger.info(PREFIX,
@@ -28,7 +28,8 @@ export async function placeHistoricalCounterOrders(
 
     // Fetch all orders from TWAP SDK
     const blockchainOrders = await TwapService.fetchLimitOrders(wallet.address)
-
+    console.log(blockchainOrders.COMPLETED[0]);
+    
     KatanaLogger.info(PREFIX,
       `[Wallet ${wallet.index}] TWAP SDK returned: ${blockchainOrders.COMPLETED.length} COMPLETED orders total`
     )
