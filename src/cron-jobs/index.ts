@@ -6,6 +6,7 @@
 import { startProactiveCandlesCron } from './updateProactiveCandlesJob'
 // import { startLimitOrderBotCron, runImmediately as runLimitOrderBot } from './startLimitOrderBot'
 import { startGridBotOrchestrator } from './gridBot/gridBotOrchestrator'
+import { startClassicSwapBotCron, triggerClassicSwapBotManually } from './classicSwapBot'
 
 /**
  * Initialize all cron jobs
@@ -28,6 +29,9 @@ export function initializeCronJobs() {
       console.error('[Grid Bot] Failed to initialize orchestrator:', error)
     })
 
+  // Start classic swap balance bot (every 6 hours)
+  // startClassicSwapBotCron()
+
   console.log('[Cron Jobs] All cron jobs initialized successfully\n')
 }
 
@@ -35,5 +39,7 @@ initializeCronJobs()
 
 // Export individual cron starters
 export {
-  startGridBotOrchestrator
+  startGridBotOrchestrator,
+  startClassicSwapBotCron,
+  triggerClassicSwapBotManually
 }

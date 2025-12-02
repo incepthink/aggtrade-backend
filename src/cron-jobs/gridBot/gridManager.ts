@@ -30,7 +30,8 @@ const GRID_CONFIG: GridConfig = {
   ORDER_SIZE_PERCENT: 20,     // 20% of balance
   MIN_ORDER_VALUE_USD: 6,     // $6 minimum
   EXPIRY_HOURS: 24,
-  FILL_DELAY_MINUTES: 3
+  FILL_DELAY_MINUTES: 3,
+  TESTING_MODE: process.env.GRID_BOT_TESTING_MODE === 'true' // Set to 'true' to simulate orders without blockchain
 }
 
 /**
@@ -105,19 +106,26 @@ export async function placeGrid(wallet: BotWallet, executionId: string): Promise
       return result
     }
 
-    // 6. Place BUY orders (USDC → ETH at -1%, -2%, -3%)
-    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Placing ${GRID_CONFIG.BUY_OFFSETS.length} BUY orders...`)
+    // 6. Place paired BUY and SELL orders
+    // Pair orders: BUY at -N% with corresponding SELL at +N%
+    // Execute BUY first, then SELL. If either fails, skip the pair.
+    const pairCount = Math.min(GRID_CONFIG.BUY_OFFSETS.length, GRID_CONFIG.SELL_OFFSETS.length)
+    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Placing ${pairCount} paired BUY+SELL orders...`)
 
-    for (const offset of GRID_CONFIG.BUY_OFFSETS) {
+    for (let i = 0; i < pairCount; i++) {
+      const buyOffset = GRID_CONFIG.BUY_OFFSETS[i]
+      const sellOffset = GRID_CONFIG.SELL_OFFSETS[i]
+
       try {
-        const targetEthPrice = ethPrice * (1 + offset / 100)
+        // ============ STEP 1: Place BUY order ============
+        const targetEthPrice = ethPrice * (1 + buyOffset / 100)
         // For BUY orders (USDC → ETH): limitPrice = how much ETH per 1 USDC
         // If 1 ETH = $2970, then 1 USDC = 1/2970 ETH = 0.000336 ETH
-        const limitPrice = 1 / targetEthPrice
-        const orderType = 'grid_buy'
+        const buyLimitPrice = 1 / targetEthPrice
+        const buyOrderType = 'grid_buy'
 
         KatanaLogger.info(PREFIX,
-          `[Wallet ${wallet.index}] Placing BUY order: ${usdcPerOrder} USDC @ $${targetEthPrice.toFixed(2)} (${offset}%)`
+          `[Wallet ${wallet.index}] Pair ${i + 1}/${pairCount} - Placing BUY order: ${usdcPerOrder} USDC @ $${targetEthPrice.toFixed(2)} (${buyOffset}%)`
         )
 
         await placeOrder({
@@ -126,34 +134,25 @@ export async function placeGrid(wallet: BotWallet, executionId: string): Promise
           fromToken: USDC_TOKEN,
           toToken: ETH_TOKEN,
           amount: usdcPerOrder.toFixed(6),
-          limitPrice,
-          orderType,
+          limitPrice: buyLimitPrice,
+          orderType: buyOrderType,
           parentOrderId: null,
-          gridOffset: offset
-        })
+          gridOffset: buyOffset
+        }, GRID_CONFIG.TESTING_MODE)
 
+        KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] BUY order confirmed at ${buyOffset}%`)
         result.buyOrders++
         result.totalOrders++
 
-        // Wait 1 second between orders to avoid rate limits
+        // Wait 1 second before placing corresponding SELL order
         await sleep(1000)
-      } catch (error: any) {
-        const errorMsg = `Failed to place BUY order at ${offset}%: ${error.message}`
-        KatanaLogger.error(PREFIX, `[Wallet ${wallet.index}] ${errorMsg}`)
-        result.errors.push(errorMsg)
-      }
-    }
 
-    // 7. Place SELL orders (ETH → USDC at +1%, +2%, +3%)
-    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Placing ${GRID_CONFIG.SELL_OFFSETS.length} SELL orders...`)
+        // ============ STEP 2: Place corresponding SELL order ============
+        const sellLimitPrice = ethPrice * (1 + sellOffset / 100)
+        const sellOrderType = 'grid_sell'
 
-    for (const offset of GRID_CONFIG.SELL_OFFSETS) {
-      try {
-        const limitPrice = ethPrice * (1 + offset / 100)
-        const orderType = 'grid_sell'
-
-        KatanaLogger.info(PREFIX, 
-          `[Wallet ${wallet.index}] Placing SELL order: ${ethPerOrder} ETH @ $${limitPrice.toFixed(2)} (${offset}%)`
+        KatanaLogger.info(PREFIX,
+          `[Wallet ${wallet.index}] Pair ${i + 1}/${pairCount} - Placing SELL order: ${ethPerOrder} ETH @ $${sellLimitPrice.toFixed(2)} (${sellOffset}%)`
         )
 
         await placeOrder({
@@ -162,21 +161,34 @@ export async function placeGrid(wallet: BotWallet, executionId: string): Promise
           fromToken: ETH_TOKEN,
           toToken: USDC_TOKEN,
           amount: ethPerOrder.toFixed(18),
-          limitPrice,
-          orderType,
+          limitPrice: sellLimitPrice,
+          orderType: sellOrderType,
           parentOrderId: null,
-          gridOffset: offset
-        })
+          gridOffset: sellOffset
+        }, GRID_CONFIG.TESTING_MODE)
 
+        KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] SELL order confirmed at ${sellOffset}%`)
         result.sellOrders++
         result.totalOrders++
 
-        // Wait 1 second between orders
+        KatanaLogger.info(PREFIX,
+          `[Wallet ${wallet.index}] Pair ${i + 1}/${pairCount} successfully placed (BUY ${buyOffset}% + SELL ${sellOffset}%)`
+        )
+
+        // Wait 1 second between pairs to avoid rate limits
         await sleep(1000)
+
       } catch (error: any) {
-        const errorMsg = `Failed to place SELL order at ${offset}%: ${error.message}`
+        // If either order in the pair fails, log and skip this pair
+        const errorMsg = `Failed to place pair ${i + 1} (BUY ${buyOffset}% / SELL ${sellOffset}%): ${error.message}`
         KatanaLogger.error(PREFIX, `[Wallet ${wallet.index}] ${errorMsg}`)
         result.errors.push(errorMsg)
+
+        // Note: If BUY succeeded but SELL failed, the counts above already reflected the BUY
+        // This is acceptable since we're tracking what actually got placed
+        KatanaLogger.warn(PREFIX,
+          `[Wallet ${wallet.index}] Skipping pair ${i + 1} due to error. Current state: ${result.buyOrders} BUY, ${result.sellOrders} SELL`
+        )
       }
     }
 

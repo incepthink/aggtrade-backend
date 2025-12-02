@@ -1,8 +1,10 @@
 import { BotWallet, OrderStatusUpdate } from './types'
 import {TwapService, type TwapOrder} from '../../services/twap'
+import { OrderStatus } from '@orbs-network/twap-sdk'
 import { getPendingOrders, syncOrderStatus } from './databaseSync'
 import { KatanaLogger } from '../../utils/logger'
 import { sleep } from '../utils/botHelpers'
+import { getGridConfig } from './gridManager'
 
 const PREFIX = '[OrderStatusPoller]'
 
@@ -46,17 +48,9 @@ async function _pollOrderStatusInternal(
   executionId: string
 ): Promise<OrderStatusUpdate[]> {
   const updates: OrderStatusUpdate[] = []
+  const gridConfig = getGridConfig()
 
   KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Polling order status for ${wallet.address}`)
-
-  // 1. Fetch all orders from blockchain
-  const blockchainOrders = await TwapService.fetchLimitOrders(wallet.address)
-
-  KatanaLogger.info(PREFIX, 
-    `[Wallet ${wallet.index}] Blockchain orders: ${blockchainOrders.OPEN.length} OPEN, ` +
-    `${blockchainOrders.COMPLETED.length} COMPLETED, ${blockchainOrders.EXPIRED.length} EXPIRED, ` +
-    `${blockchainOrders.CANCELED.length} CANCELED`
-  )
 
   // 2. Fetch pending/partial orders from database
   const dbOrders = await getPendingOrders(wallet.address, executionId)
@@ -67,6 +61,79 @@ async function _pollOrderStatusInternal(
   }
 
   KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Database pending orders: ${dbOrders.length}`)
+
+  // ========== TESTING MODE: Auto-mark all pending orders as filled ==========
+  if (gridConfig.TESTING_MODE) {
+    KatanaLogger.warn(PREFIX, `[TEST MODE] [Wallet ${wallet.index}] Auto-marking ${dbOrders.length} pending orders as filled`)
+
+    for (const dbOrder of dbOrders) {
+      try {
+        // Create mock filled order data
+        const mockBlockchainOrder: TwapOrder = {
+          id: dbOrder.blockchain_order_id || Math.floor(Math.random() * 100000),
+          maker: wallet.address,
+          srcTokenAddress: dbOrder.src_token_address,
+          dstTokenAddress: dbOrder.dst_token_address,
+          srcAmount: dbOrder.src_amount,
+          srcAmountPerChunk: dbOrder.src_amount,
+          dstMinAmountPerChunk: dbOrder.dst_min_amount,
+          filledSrcAmount: dbOrder.src_amount, // 100% filled
+          filledDstAmount: dbOrder.dst_min_amount, // Use minimum expected
+          chunks: 1,
+          createdAt: new Date(dbOrder.placed_at).getTime(),
+          deadline: dbOrder.deadline,
+          fillDelay: 180000, // 3 minutes in ms
+          txHash: dbOrder.tx_hash,
+          status: OrderStatus.Completed,
+          fillDelayMs: 180000,
+          progress: 100
+        }
+
+        const newStatus = 'filled'
+
+        KatanaLogger.info(PREFIX,
+          `[TEST MODE] [Wallet ${wallet.index}] Marking order ${dbOrder.order_id} as filled (100%)`
+        )
+
+        // Sync to database
+        await syncOrderStatus(dbOrder, mockBlockchainOrder, newStatus)
+
+        // Add to updates list
+        updates.push({
+          dbOrderId: dbOrder.id,
+          blockchainOrderId: mockBlockchainOrder.id,
+          oldStatus: dbOrder.status,
+          newStatus,
+          progress: 100,
+          filledSrcAmount: mockBlockchainOrder.filledSrcAmount,
+          filledDstAmount: mockBlockchainOrder.filledDstAmount
+        })
+
+        KatanaLogger.info(PREFIX,
+          `[TEST MODE] [Wallet ${wallet.index}] Order ${dbOrder.order_id} successfully marked as filled`
+        )
+      } catch (error) {
+        KatanaLogger.error(PREFIX,
+          `[TEST MODE] [Wallet ${wallet.index}] Failed to mark order ${dbOrder.order_id} as filled`,
+          error
+        )
+      }
+    }
+
+    KatanaLogger.info(PREFIX, `[TEST MODE] [Wallet ${wallet.index}] Poll complete: ${updates.length} orders marked as filled`)
+    return updates
+  }
+
+  // ========== PRODUCTION MODE: Fetch from blockchain ==========
+
+  // 1. Fetch all orders from blockchain
+  const blockchainOrders = await TwapService.fetchLimitOrders(wallet.address)
+
+  KatanaLogger.info(PREFIX,
+    `[Wallet ${wallet.index}] Blockchain orders: ${blockchainOrders.OPEN.length} OPEN, ` +
+    `${blockchainOrders.COMPLETED.length} COMPLETED, ${blockchainOrders.EXPIRED.length} EXPIRED, ` +
+    `${blockchainOrders.CANCELED.length} CANCELED`
+  )
 
   // 3. Match and detect changes
   for (const dbOrder of dbOrders) {

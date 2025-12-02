@@ -1,7 +1,7 @@
 import { BotWallet, OrderStatusUpdate } from './types'
 import BotLimitOrder from '../../models/BotLimitOrder'
 import { placeOrder } from './orderExecutor'
-import { getTokenConfigs } from './gridManager'
+import { getTokenConfigs, getGridConfig } from './gridManager'
 import { getCurrentETHPrice } from './priceManager'
 import { updateOrderMetadata } from './databaseSync'
 import { KatanaLogger } from '../../utils/logger'
@@ -22,15 +22,17 @@ export async function processFilledOrders(
     return
   }
 
-  KatanaLogger.info(PREFIX, 
+  KatanaLogger.info(PREFIX,
     `[Wallet ${wallet.index}] Processing ${filledUpdates.length} filled orders for counter-order placement`
   )
 
+  const gridConfig = getGridConfig()
+
   for (const update of filledUpdates) {
     try {
-      await placeCounterOrder(update, wallet, executionId)
+      await placeCounterOrder(update, wallet, executionId, gridConfig.TESTING_MODE)
     } catch (error) {
-      KatanaLogger.error(PREFIX, 
+      KatanaLogger.error(PREFIX,
         `[Wallet ${wallet.index}] Failed to place counter-order for order ${update.dbOrderId}`,
         error
       )
@@ -44,13 +46,33 @@ export async function processFilledOrders(
 async function placeCounterOrder(
   update: OrderStatusUpdate,
   wallet: BotWallet,
-  executionId: string
+  executionId: string,
+  testingMode: boolean = false
 ): Promise<void> {
   // 1. Fetch parent order from database
   const parentOrder = await BotLimitOrder.findByPk(update.dbOrderId)
 
   if (!parentOrder) {
     KatanaLogger.error(PREFIX, `[Wallet ${wallet.index}] Parent order not found: ${update.dbOrderId}`)
+    return
+  }
+
+  // 1.5. Check if counter order already exists (duplicate protection)
+  const isParentBuyOrder = parentOrder.order_type.includes('buy')
+  const counterOrderType = isParentBuyOrder ? 'counter_sell' : 'counter_buy'
+
+  const existingCounterOrder = await BotLimitOrder.findOne({
+    where: {
+      parent_order_id: parentOrder.order_id,
+      order_type: counterOrderType
+    }
+  })
+
+  if (existingCounterOrder) {
+    KatanaLogger.info(PREFIX,
+      `[Wallet ${wallet.index}] Counter order already exists for parent ${parentOrder.order_id} ` +
+      `(counter order ID: ${existingCounterOrder.order_id}). Skipping.`
+    )
     return
   }
 
@@ -71,23 +93,23 @@ async function placeCounterOrder(
     }
 
     // For ETH/USDC: execution price = USDC / ETH (USD per ETH)
-    // Need to determine which token is which
-    const isParentBuyOrder = parentOrder.order_type.includes('buy')
-
+    // isParentBuyOrder already determined above for duplicate check
     let executionPriceUSD: number
 
     if (isParentBuyOrder) {
-      // Buy order: spent USDC, got ETH
-      // execution price = USDC spent / ETH received
-      executionPriceUSD = dstHuman / srcHuman
+      // Buy order: spent USDC (src), received ETH (dst)
+      // execution price = USDC spent / ETH received = USD per ETH
+      executionPriceUSD = srcHuman / dstHuman
     } else {
-      // Sell order: spent ETH, got USDC
-      // execution price = USDC received / ETH spent
+      // Sell order: spent ETH (src), received USDC (dst)
+      // execution price = USDC received / ETH spent = USD per ETH
       executionPriceUSD = dstHuman / srcHuman
     }
 
-    KatanaLogger.info(PREFIX, 
-      `[Wallet ${wallet.index}] Execution price: $${executionPriceUSD.toFixed(2)} per ETH`
+    KatanaLogger.info(PREFIX,
+      `[Wallet ${wallet.index}] Execution price calculation: ` +
+      `parentType=${parentOrder.order_type}, srcHuman=${srcHuman.toFixed(6)}, ` +
+      `dstHuman=${dstHuman.toFixed(6)}, price=$${executionPriceUSD.toFixed(2)} per ETH`
     )
 
     // 3. Determine counter-order direction and price
@@ -153,7 +175,7 @@ async function placeCounterOrder(
       orderType: counterOrderType as any,
       parentOrderId: parentOrder.order_id,
       gridOffset: null // Counter-orders don't have grid offset
-    })
+    }, testingMode)
 
     KatanaLogger.info(PREFIX, 
       `[Wallet ${wallet.index}] ✅ Counter-order placed successfully for ${parentOrder.order_id}`

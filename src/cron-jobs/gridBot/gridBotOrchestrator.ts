@@ -4,7 +4,9 @@ import { startWalletMonitor } from './walletMonitor'
 import { generateExecutionId, sleep } from '../utils/botHelpers'
 import BotExecution from '../../models/BotExecution'
 import BotWalletExecution from '../../models/BotWalletExecution'
+import BotLimitOrder from '../../models/BotLimitOrder'
 import { KatanaLogger } from '../../utils/logger'
+import { getGridConfig } from './gridManager'
 
 const PREFIX = '[GridBotOrchestrator]'
 
@@ -44,6 +46,53 @@ function loadBotWallets(provider: ethers.Provider): BotWallet[] {
   }
 
   return wallets
+}
+
+/**
+ * Get the latest execution ID for a wallet that has pending orders
+ * Returns null if no pending orders exist for this wallet
+ */
+async function getLatestExecutionForWallet(walletAddress: string): Promise<string | null> {
+  try {
+    // Find the most recent wallet execution that has pending/partial orders
+    const latestExecution = await BotWalletExecution.findOne({
+      where: {
+        wallet_address: walletAddress
+      },
+      order: [['created_at', 'DESC']],
+      include: [{
+        model: BotLimitOrder,
+        where: {
+          status: ['pending', 'partial']
+        },
+        required: true, // INNER JOIN - only return if pending orders exist
+        attributes: ['id'] // We only need to check existence
+      }]
+    })
+
+    if (latestExecution) {
+      const orderCount = await BotLimitOrder.count({
+        where: {
+          execution_id: latestExecution.execution_id,
+          wallet_address: walletAddress,
+          status: ['pending', 'partial']
+        }
+      })
+
+      KatanaLogger.info(PREFIX,
+        `Found latest execution ${latestExecution.execution_id} for wallet ${walletAddress} ` +
+        `with ${orderCount} pending orders`
+      )
+
+      return latestExecution.execution_id
+    }
+
+    KatanaLogger.info(PREFIX, `No pending orders found for wallet ${walletAddress} - will create new execution`)
+    return null
+  } catch (error) {
+    KatanaLogger.error(PREFIX, `Failed to get latest execution for ${walletAddress}`, error)
+    return null // Fall back to creating new execution
+  }
 }
 
 /**
@@ -108,7 +157,24 @@ async function startWalletMonitorSafe(
   executionId: string
 ): Promise<void> {
   try {
-    await initializeWalletExecution(executionId, wallet)
+    // Check if wallet execution already exists (resuming case)
+    const existingWalletExecution = await BotWalletExecution.findOne({
+      where: {
+        execution_id: executionId,
+        wallet_address: wallet.address
+      }
+    })
+
+    if (!existingWalletExecution) {
+      // New execution - initialize wallet execution record
+      await initializeWalletExecution(executionId, wallet)
+    } else {
+      // Resuming execution - just update status
+      KatanaLogger.info(PREFIX,
+        `[Wallet ${wallet.index}] Resuming existing wallet execution`
+      )
+    }
+
     await startWalletMonitor(wallet, executionId)
 
     await BotWalletExecution.update(
@@ -156,6 +222,17 @@ export async function startGridBotOrchestrator(): Promise<void> {
   KatanaLogger.info(PREFIX, '=== GRID BOT ORCHESTRATOR STARTING ===')
 
   try {
+    // Check testing mode
+    const gridConfig = getGridConfig()
+    if (gridConfig.TESTING_MODE) {
+      KatanaLogger.warn(PREFIX, '╔══════════════════════════════════════════════════════╗')
+      KatanaLogger.warn(PREFIX, '║          🧪 TESTING MODE ENABLED 🧪                  ║')
+      KatanaLogger.warn(PREFIX, '║  Orders will NOT be sent to blockchain              ║')
+      KatanaLogger.warn(PREFIX, '║  All orders will be auto-marked as filled           ║')
+      KatanaLogger.warn(PREFIX, '║  Set GRID_BOT_TESTING_MODE=false to disable         ║')
+      KatanaLogger.warn(PREFIX, '╚══════════════════════════════════════════════════════╝')
+    }
+
     // 1. Initialize Ethereum provider
     const provider = new ethers.JsonRpcProvider(RPC_URL)
     KatanaLogger.info(PREFIX, `Connected to RPC: ${RPC_URL}`)
@@ -170,22 +247,57 @@ export async function startGridBotOrchestrator(): Promise<void> {
 
     KatanaLogger.info(PREFIX, `Loaded ${wallets.length} wallets`)
 
-    // 3. Generate execution ID
-    const executionId = generateExecutionId()
-    KatanaLogger.info(PREFIX, `Execution ID: ${executionId}`)
+    // 3. Check for existing executions or create new ones per wallet
+    const walletExecutions: Map<string, string> = new Map() // wallet address -> executionId
+    let newExecutionsNeeded = 0
 
-    // 4. Initialize bot execution record
-    await initializeBotExecution(executionId, wallets.length)
+    for (const wallet of wallets) {
+      const existingExecutionId = await getLatestExecutionForWallet(wallet.address)
+
+      if (existingExecutionId) {
+        walletExecutions.set(wallet.address, existingExecutionId)
+        KatanaLogger.info(PREFIX,
+          `[Wallet ${wallet.index}] Resuming execution: ${existingExecutionId}`
+        )
+      } else {
+        newExecutionsNeeded++
+      }
+    }
+
+    // 4. Create new execution ID for wallets that need one
+    let newExecutionId: string | null = null
+    if (newExecutionsNeeded > 0) {
+      newExecutionId = generateExecutionId()
+      KatanaLogger.info(PREFIX,
+        `Creating new execution ${newExecutionId} for ${newExecutionsNeeded} wallet(s) without pending orders`
+      )
+
+      // Initialize bot execution record for new execution
+      await initializeBotExecution(newExecutionId, newExecutionsNeeded)
+
+      // Assign new execution ID to wallets that need it
+      for (const wallet of wallets) {
+        if (!walletExecutions.has(wallet.address)) {
+          walletExecutions.set(wallet.address, newExecutionId)
+          KatanaLogger.info(PREFIX,
+            `[Wallet ${wallet.index}] Using new execution: ${newExecutionId}`
+          )
+        }
+      }
+    }
 
     // 5. Start wallet monitors with staggered timing
-    KatanaLogger.info(PREFIX, 
+    KatanaLogger.info(PREFIX,
       `Starting ${wallets.length} wallet monitors (staggered by ${WALLET_START_STAGGER_MS / 1000}s)...`
     )
 
     for (let i = 0; i < wallets.length; i++) {
       const wallet = wallets[i]
+      const executionId = walletExecutions.get(wallet.address)!
 
-      KatanaLogger.info(PREFIX, `[${i + 1}/${wallets.length}] Starting monitor for wallet ${wallet.index}...`)
+      KatanaLogger.info(PREFIX,
+        `[${i + 1}/${wallets.length}] Starting monitor for wallet ${wallet.index} with execution ${executionId}...`
+      )
 
       // Start monitor (async, doesn't block)
       startWalletMonitorSafe(wallet, executionId).catch((error) => {

@@ -30,6 +30,7 @@ export interface GridConfig {
   MIN_ORDER_VALUE_USD: number // $6 minimum
   EXPIRY_HOURS: number // 24 hours
   FILL_DELAY_MINUTES: number // 3 minutes
+  TESTING_MODE: boolean // When true, orders are simulated without blockchain transactions
 }
 
 /**

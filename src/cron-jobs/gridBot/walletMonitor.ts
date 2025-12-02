@@ -18,8 +18,29 @@ export async function startWalletMonitor(
   KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Starting wallet monitor for ${wallet.address}`)
 
   try {
+    // 0. IMMEDIATELY poll status for any filled orders (resume scenario)
+    // This ensures orders that filled while bot was offline get processed
+    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Running startup poll to check for filled orders...`)
+    const startupStatusUpdates = await pollOrderStatus(wallet, executionId)
+
+    if (startupStatusUpdates.length > 0) {
+      KatanaLogger.info(PREFIX,
+        `[Wallet ${wallet.index}] Found ${startupStatusUpdates.length} status updates on startup`
+      )
+
+      const startupFilledOrders = getFullyFilledOrders(startupStatusUpdates)
+      if (startupFilledOrders.length > 0) {
+        KatanaLogger.info(PREFIX,
+          `[Wallet ${wallet.index}] 🎯 Found ${startupFilledOrders.length} filled orders on startup - placing counter orders`
+        )
+        await processFilledOrders(startupFilledOrders, wallet, executionId)
+      }
+    } else {
+      KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] No pending orders found on startup`)
+    }
+
     // 1. Place initial grid (if not already placed)
-    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Placing initial grid...`)
+    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Checking/placing initial grid...`)
     const gridResult = await placeGrid(wallet, executionId)
 
     if (gridResult.success) {

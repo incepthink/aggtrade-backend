@@ -176,18 +176,20 @@ export async function getPendingOrders(
 }
 
 /**
- * Check if grid exists for wallet
+ * Check if grid exists for wallet (checks ALL executions, not just current one)
+ * This prevents placing duplicate grids when resuming after restart
  */
 export async function hasExistingGrid(
   walletAddress: string,
-  executionId: string
+  executionId: string // Kept for backward compatibility but not used in where clause
 ): Promise<boolean> {
   try {
     const count = await BotLimitOrder.count({
       where: {
         wallet_address: walletAddress,
-        execution_id: executionId,
+        status: ['pending', 'partial'], // Only check active orders
         order_type: ['grid_buy', 'grid_sell']
+        // NOTE: Removed execution_id filter to check ALL executions
       }
     })
 

@@ -2,8 +2,23 @@ import User from './User'
 import ReferralCode from './ReferralCode'
 import Referral from './Referral'
 import KatanaSwap from "./KatanaSwap"
+import BotWalletExecution from './BotWalletExecution'
+import BotLimitOrder from './BotLimitOrder'
 
 const defineAssociations = () => {
+  // BotWalletExecution <-> BotLimitOrder (one-to-many)
+  BotWalletExecution.hasMany(BotLimitOrder, {
+    foreignKey: 'execution_id',
+    sourceKey: 'execution_id',
+    as: 'orders'
+  })
+  BotLimitOrder.belongsTo(BotWalletExecution, {
+    foreignKey: 'execution_id',
+    targetKey: 'execution_id',
+    as: 'walletExecution'
+  })
+
+
   // User <-> ReferralCode (one-to-one)
   User.hasOne(ReferralCode, {
     foreignKey: 'user_id',
@@ -37,4 +52,4 @@ const defineAssociations = () => {
 
 defineAssociations()
 
-export { User, ReferralCode, Referral, KatanaSwap }
+export { User, ReferralCode, Referral, KatanaSwap, BotWalletExecution, BotLimitOrder }

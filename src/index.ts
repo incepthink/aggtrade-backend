@@ -4,6 +4,7 @@ import { createApp } from "./app.js";
 import { connectDB } from "./mongodb.js";
 import dotenv from "dotenv";
 import sequelize from "./utils/db/sequelize"
+import "./models/index.js" // Load model associations
 
 async function bootstrap() {
   dotenv.config();

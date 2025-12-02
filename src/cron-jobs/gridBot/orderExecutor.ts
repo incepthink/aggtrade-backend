@@ -23,7 +23,7 @@ const CHAIN_ID = 747474
 /**
  * Place a limit order and log to both database tables
  */
-export async function placeOrder(params: OrderParams): Promise<any> {
+export async function placeOrder(params: OrderParams, testingMode: boolean = false): Promise<any> {
   const {
     wallet,
     executionId,
@@ -36,9 +36,10 @@ export async function placeOrder(params: OrderParams): Promise<any> {
     gridOffset = null
   } = params
 
+  const modePrefix = testingMode ? '[TEST MODE]' : ''
   KatanaLogger.info(
     PREFIX,
-    `Placing ${orderType} order: ${amount} ${fromToken.symbol} → ${toToken.symbol} @ $${limitPrice}`
+    `${modePrefix} Placing ${orderType} order: ${amount} ${fromToken.symbol} → ${toToken.symbol} @ $${limitPrice}`
   )
 
   try {
@@ -72,65 +73,98 @@ export async function placeOrder(params: OrderParams): Promise<any> {
       )
     }
 
-    KatanaLogger.info(PREFIX, `Balance check passed: ${fromWei(balance.toString(), fromToken.decimals)} ${fromToken.symbol}`)
+    KatanaLogger.info(PREFIX, `${modePrefix} Balance check passed: ${fromWei(balance.toString(), fromToken.decimals)} ${fromToken.symbol}`)
 
-    // 3. Prepare transaction via TWAP SDK
-    const transaction = TwapService.prepareLimitOrder({
-      srcToken: fromToken.address as any,
-      dstToken: toToken.address as any,
-      srcAmount: srcAmountWei.toString(),
-      dstMinAmount: dstMinAmountWei.toString(),
-      srcChunkAmount: srcAmountWei.toString(), // For limit orders, chunk = total amount
-      fillDelay: { unit: 'Minutes', value: 3 },
-      deadline: deadline
-    })
-
-    KatanaLogger.info(PREFIX, `Transaction prepared: to=${transaction.to}, value=${transaction.value}`)
-
-    // 4. Approve token (if ERC20)
-    if (!fromToken.isNative) {
-      KatanaLogger.info(PREFIX, `Checking token approval for ${fromToken.symbol}...`)
-      const approvalResult = await ensureTokenApproval(
-        wallet.signer,
-        fromToken.address,
-        transaction.to,
-        srcAmountWei,
-        false
-      )
-
-      if (approvalResult.needsApproval) {
-        KatanaLogger.info(PREFIX, `Token approved: ${approvalResult.txHash}`)
-      } else {
-        KatanaLogger.info(PREFIX, 'Token already approved')
-      }
-    }
-
-    // 5. Send transaction
-    KatanaLogger.info(PREFIX, 'Sending transaction...')
-    const txResponse = await wallet.signer.sendTransaction(transaction)
-    KatanaLogger.info(PREFIX, `Transaction sent: ${txResponse.hash}`)
-
-    const receipt = await txResponse.wait()
-    KatanaLogger.info(PREFIX, `Transaction confirmed: block ${receipt?.blockNumber}`)
-
-    // 6. Wait for blockchain indexing (CRITICAL!)
-    KatanaLogger.info(PREFIX, 'Waiting 5s for blockchain indexing...')
-    await sleep(5000)
-
-    // 7. Fetch blockchain_order_id from SDK
+    // Variables to hold transaction data
+    let txResponse: any
+    let receipt: any
     let blockchainOrderId: number | null = null
-    try {
-      const orders = await TwapService.fetchLimitOrders(wallet.address)
-      const newOrder = orders.ALL.find((o: any) => o.txHash === txResponse.hash)
-      blockchainOrderId = newOrder?.id || null
 
-      if (blockchainOrderId) {
-        KatanaLogger.info(PREFIX, `Blockchain order ID fetched: ${blockchainOrderId}`)
-      } else {
-        KatanaLogger.warn(PREFIX, `Could not fetch blockchain order ID for tx ${txResponse.hash}`)
+    if (testingMode) {
+      // ========== TESTING MODE: Simulate order without blockchain ==========
+      KatanaLogger.warn(PREFIX, '[TEST MODE] Simulating order placement - NO BLOCKCHAIN TRANSACTION')
+
+      // Generate mock transaction hash
+      const mockTxHash = `0xtest${Date.now()}${Math.random().toString(36).substr(2, 9)}`
+      const mockBlockNumber = Math.floor(Math.random() * 1000000) + 1000000
+      const mockOrderId = Math.floor(Math.random() * 100000) + 1
+
+      // Create mock transaction response
+      txResponse = {
+        hash: mockTxHash,
+        wait: async () => ({
+          blockNumber: mockBlockNumber,
+          status: 1
+        })
       }
-    } catch (fetchError) {
-      KatanaLogger.error(PREFIX, 'Failed to fetch blockchain order ID', fetchError)
+
+      receipt = await txResponse.wait()
+      blockchainOrderId = mockOrderId
+
+      KatanaLogger.info(PREFIX, `[TEST MODE] Mock transaction: ${mockTxHash}`)
+      KatanaLogger.info(PREFIX, `[TEST MODE] Mock block: ${mockBlockNumber}`)
+      KatanaLogger.info(PREFIX, `[TEST MODE] Mock blockchain order ID: ${mockOrderId}`)
+
+    } else {
+      // ========== PRODUCTION MODE: Actual blockchain transaction ==========
+
+      // 3. Prepare transaction via TWAP SDK
+      const transaction = TwapService.prepareLimitOrder({
+        srcToken: fromToken.address as any,
+        dstToken: toToken.address as any,
+        srcAmount: srcAmountWei.toString(),
+        dstMinAmount: dstMinAmountWei.toString(),
+        srcChunkAmount: srcAmountWei.toString(), // For limit orders, chunk = total amount
+        fillDelay: { unit: 'Minutes', value: 3 },
+        deadline: deadline
+      })
+
+      KatanaLogger.info(PREFIX, `Transaction prepared: to=${transaction.to}, value=${transaction.value}`)
+
+      // 4. Approve token (if ERC20)
+      if (!fromToken.isNative) {
+        KatanaLogger.info(PREFIX, `Checking token approval for ${fromToken.symbol}...`)
+        const approvalResult = await ensureTokenApproval(
+          wallet.signer,
+          fromToken.address,
+          transaction.to,
+          srcAmountWei,
+          false
+        )
+
+        if (approvalResult.needsApproval) {
+          KatanaLogger.info(PREFIX, `Token approved: ${approvalResult.txHash}`)
+        } else {
+          KatanaLogger.info(PREFIX, 'Token already approved')
+        }
+      }
+
+      // 5. Send transaction
+      KatanaLogger.info(PREFIX, 'Sending transaction...')
+      txResponse = await wallet.signer.sendTransaction(transaction)
+      KatanaLogger.info(PREFIX, `Transaction sent: ${txResponse.hash}`)
+
+      receipt = await txResponse.wait()
+      KatanaLogger.info(PREFIX, `Transaction confirmed: block ${receipt?.blockNumber}`)
+
+      // 6. Wait for blockchain indexing (CRITICAL!)
+      KatanaLogger.info(PREFIX, 'Waiting 5s for blockchain indexing...')
+      await sleep(5000)
+
+      // 7. Fetch blockchain_order_id from SDK
+      try {
+        const orders = await TwapService.fetchLimitOrders(wallet.address)
+        const newOrder = orders.ALL.find((o: any) => o.txHash === txResponse.hash)
+        blockchainOrderId = newOrder?.id || null
+
+        if (blockchainOrderId) {
+          KatanaLogger.info(PREFIX, `Blockchain order ID fetched: ${blockchainOrderId}`)
+        } else {
+          KatanaLogger.warn(PREFIX, `Could not fetch blockchain order ID for tx ${txResponse.hash}`)
+        }
+      } catch (fetchError) {
+        KatanaLogger.error(PREFIX, 'Failed to fetch blockchain order ID', fetchError)
+      }
     }
 
     // 8. Find or create user
