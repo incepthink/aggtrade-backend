@@ -186,8 +186,8 @@ async function startWalletMonitorSafe(
         }
       }
     )
-  } catch (error) {
-    KatanaLogger.error(PREFIX, `Failed to start monitor for wallet ${wallet.index}`, error)
+  } catch (error: any) {
+    KatanaLogger.error(PREFIX, `Failed to start monitor for wallet ${wallet.index}`, error.error)
 
     // Update wallet execution status to failed
     try {
