@@ -199,3 +199,34 @@ export async function hasExistingGrid(
     return false
   }
 }
+
+/**
+ * Check if specific token has existing active orders (pending or partial)
+ * Used to skip placing new orders for tokens that already have active trading
+ */
+export async function hasExistingOrdersForToken(
+  walletAddress: string,
+  executionId: string,
+  tokenSymbol: string
+): Promise<boolean> {
+  try {
+    const { Op } = require('sequelize')
+
+    const count = await BotLimitOrder.count({
+      where: {
+        wallet_address: walletAddress,
+        status: ['pending', 'partial'], // Only check active orders
+        [Op.or]: [
+          { src_token_symbol: tokenSymbol },
+          { dst_token_symbol: tokenSymbol }
+        ]
+        // NOTE: Not filtering by execution_id to check ALL active orders for this token
+      }
+    })
+
+    return count > 0
+  } catch (error) {
+    KatanaLogger.error(PREFIX, `Failed to check existing orders for token ${tokenSymbol}`, error)
+    return false
+  }
+}

@@ -1,8 +1,9 @@
 import { BotWallet, OrderStatusUpdate } from './types'
 import BotLimitOrder from '../../models/BotLimitOrder'
 import { placeOrder } from './orderExecutor'
-import { getTokenConfigs, getGridConfig } from './gridManager'
-import { getCurrentETHPrice } from './priceManager'
+import { getGridConfig } from './gridManager'
+import { getToken } from './tokenPairs.config'
+import { getCurrentTokenPrice } from './priceManager'
 import { updateOrderMetadata } from './databaseSync'
 import { KatanaLogger } from '../../utils/logger'
 
@@ -81,9 +82,9 @@ async function placeCounterOrder(
   )
 
   try {
-    // 2. Calculate execution price (CRITICAL: convert to human-readable first!)
-    const srcDecimals = parentOrder.src_token_symbol === 'USDC' ? 6 : 18
-    const dstDecimals = parentOrder.dst_token_symbol === 'USDC' ? 6 : 18
+    // 2. Get token configurations from parent order
+    const srcToken = getToken(parentOrder.src_token_symbol)
+    const dstToken = getToken(parentOrder.dst_token_symbol)
 
     const srcHuman = parseFloat(parentOrder.filled_src_amount)
     const dstHuman = parseFloat(parentOrder.filled_dst_amount)
@@ -92,47 +93,52 @@ async function placeCounterOrder(
       throw new Error('Invalid filled amounts: one or both are zero')
     }
 
-    // For ETH/USDC: execution price = USDC / ETH (USD per ETH)
-    // isParentBuyOrder already determined above for duplicate check
+    // 3. Calculate execution price in USD
+    // We need to determine the USD value of the trade to set counter order price
+    const srcPrice = await getCurrentTokenPrice(srcToken.symbol)
+    const dstPrice = await getCurrentTokenPrice(dstToken.symbol)
+
+    // Execution price = price of destination token at the time of fill
+    // This represents the effective price we paid/received
     let executionPriceUSD: number
 
     if (isParentBuyOrder) {
-      // Buy order: spent USDC (src), received ETH (dst)
-      // execution price = USDC spent / ETH received = USD per ETH
-      executionPriceUSD = srcHuman / dstHuman
+      // Buy order: spent src to buy dst
+      // Execution price = how much we paid per dst token in USD
+      executionPriceUSD = (srcHuman * srcPrice) / dstHuman
     } else {
-      // Sell order: spent ETH (src), received USDC (dst)
-      // execution price = USDC received / ETH spent = USD per ETH
-      executionPriceUSD = dstHuman / srcHuman
+      // Sell order: sold src for dst
+      // Execution price = how much we got per src token in USD
+      executionPriceUSD = (dstHuman * dstPrice) / srcHuman
     }
 
     KatanaLogger.info(PREFIX,
       `[Wallet ${wallet.index}] Execution price calculation: ` +
-      `parentType=${parentOrder.order_type}, srcHuman=${srcHuman.toFixed(6)}, ` +
-      `dstHuman=${dstHuman.toFixed(6)}, price=$${executionPriceUSD.toFixed(2)} per ETH`
+      `${srcToken.symbol}→${dstToken.symbol}, ` +
+      `srcHuman=${srcHuman.toFixed(6)}, dstHuman=${dstHuman.toFixed(6)}, ` +
+      `executionPrice=$${executionPriceUSD.toFixed(2)} per ${isParentBuyOrder ? dstToken.symbol : srcToken.symbol}`
     )
 
-    // 3. Determine counter-order direction and price
+    // 4. Determine counter-order direction and price
+    // For buy orders: sell at +1% to take profit
+    // For sell orders: buy back at -1% to take profit
     const counterPrice = isParentBuyOrder
       ? executionPriceUSD * 1.01 // Buy filled → Sell at +1%
       : executionPriceUSD * 0.99 // Sell filled → Buy at -1%
 
-    KatanaLogger.info(PREFIX, 
-      `[Wallet ${wallet.index}] Counter-order price: $${counterPrice.toFixed(2)} (${isParentBuyOrder ? '+1%' : '-1%'})`
+    KatanaLogger.info(PREFIX,
+      `[Wallet ${wallet.index}] Counter-order target price: $${counterPrice.toFixed(2)} (${isParentBuyOrder ? '+1%' : '-1%'})`
     )
 
-    // 4. Use filled amount for counter-order (NOT original amount)
+    // 5. Use filled amount for counter-order (NOT original amount)
     const counterAmount = dstHuman // What we received from filled order
-    const counterAmountStr = counterAmount.toFixed(dstDecimals)
+    const counterAmountStr = counterAmount.toFixed(dstToken.decimals)
 
-    // 5. Validate minimum order value
-    const currentETHPrice = await getCurrentETHPrice()
-    const counterValueUSD = isParentBuyOrder
-      ? counterAmount * currentETHPrice // ETH * price
-      : counterAmount // Already USDC
+    // 6. Validate minimum order value
+    const counterValueUSD = counterAmount * dstPrice
 
     if (counterValueUSD < MIN_ORDER_VALUE_USD) {
-      KatanaLogger.warn(PREFIX, 
+      KatanaLogger.warn(PREFIX,
         `[Wallet ${wallet.index}] Counter-order value $${counterValueUSD.toFixed(2)} below $${MIN_ORDER_VALUE_USD} minimum, skipping`
       )
 
@@ -146,25 +152,35 @@ async function placeCounterOrder(
       return
     }
 
-    // 6. Get token configs
-    const tokens = getTokenConfigs()
-    const { ETH, USDC } = tokens
-
-    // Determine fromToken and toToken for counter-order
-    const fromToken = isParentBuyOrder ? ETH : USDC
-    const toToken = isParentBuyOrder ? USDC : ETH
+    // 7. Determine fromToken and toToken for counter-order (reverse of parent)
+    const fromToken = dstToken // We're selling what we received
+    const toToken = srcToken // We're buying back what we spent
     const counterOrderType = isParentBuyOrder ? 'counter_sell' : 'counter_buy'
 
-    // Calculate limit price based on order direction
-    // For SELL (ETH → USDC): limitPrice = USDC per 1 ETH (use counterPrice as-is)
-    // For BUY (USDC → ETH): limitPrice = ETH per 1 USDC (use 1/counterPrice)
-    const limitPrice = isParentBuyOrder ? counterPrice : (1 / counterPrice)
+    // 8. Calculate limit price for counter order
+    // Limit price is always expressed as "how much toToken per 1 fromToken"
+    // For counter sell (dst → src): we want to get back more src than we spent
+    // For counter buy (dst → src): we want to spend less dst than we received
+    let limitPrice: number
+
+    if (toToken.symbol === 'USDC') {
+      // Selling for USDC: limitPrice = how much USDC per 1 token
+      limitPrice = counterPrice
+    } else if (fromToken.symbol === 'USDC') {
+      // Buying with USDC: limitPrice = how much token per 1 USDC
+      limitPrice = 1 / counterPrice
+    } else {
+      // Neither is USDC: calculate ratio between token prices
+      const fromPriceAtCounter = isParentBuyOrder ? counterPrice : dstPrice
+      const toPriceAtCounter = isParentBuyOrder ? srcPrice : counterPrice
+      limitPrice = toPriceAtCounter / fromPriceAtCounter
+    }
 
     KatanaLogger.info(PREFIX,
-      `[Wallet ${wallet.index}] Placing ${counterOrderType}: ${counterAmountStr} ${fromToken.symbol} → ${toToken.symbol} @ $${counterPrice.toFixed(2)}`
+      `[Wallet ${wallet.index}] Placing ${counterOrderType}: ${counterAmountStr} ${fromToken.symbol} → ${toToken.symbol} @ limitPrice=${limitPrice.toFixed(8)}`
     )
 
-    // 7. Place counter-order
+    // 9. Place counter-order
     await placeOrder({
       wallet,
       executionId,
@@ -177,7 +193,7 @@ async function placeCounterOrder(
       gridOffset: null // Counter-orders don't have grid offset
     }, testingMode)
 
-    KatanaLogger.info(PREFIX, 
+    KatanaLogger.info(PREFIX,
       `[Wallet ${wallet.index}] ✅ Counter-order placed successfully for ${parentOrder.order_id}`
     )
   } catch (error) {
