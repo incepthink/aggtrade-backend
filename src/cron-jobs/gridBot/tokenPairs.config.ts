@@ -5,9 +5,9 @@ import { TokenConfig } from './types'
  * Add new tokens here to enable trading
  */
 export const TOKENS: Record<string, TokenConfig> = {
-  ETH: {
+  WETH: {
     address: '0xEE7D8BCFb72bC1880D0Cf19822eB0A2e6577aB62',
-    symbol: 'ETH',
+    symbol: 'WETH',
     decimals: 18,
     isNative: false
   },

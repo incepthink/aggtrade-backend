@@ -4,6 +4,8 @@ import Referral from './Referral'
 import KatanaSwap from "./KatanaSwap"
 import BotWalletExecution from './BotWalletExecution'
 import BotLimitOrder from './BotLimitOrder'
+import BotWallet from './BotWallet'
+import BotOrdersSimple from './BotOrdersSimple'
 
 const defineAssociations = () => {
   // BotWalletExecution <-> BotLimitOrder (one-to-many)
@@ -52,4 +54,4 @@ const defineAssociations = () => {
 
 defineAssociations()
 
-export { User, ReferralCode, Referral, KatanaSwap, BotWalletExecution, BotLimitOrder }
+export { User, ReferralCode, Referral, KatanaSwap, BotWalletExecution, BotLimitOrder, BotWallet, BotOrdersSimple }
