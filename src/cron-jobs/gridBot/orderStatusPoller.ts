@@ -237,7 +237,6 @@ async function _pollOrderStatusInternal(
 function mapBlockchainStatus(blockchainStatus: string, progress: number): 'pending' | 'partial' | 'filled' | 'canceled' | 'expired' {
   switch (blockchainStatus) {
     case 'Open':
-      if (progress === 100) return 'filled'
       return progress > 0 && progress < 100 ? 'partial' : 'pending'
     case 'Completed':
       return 'filled'

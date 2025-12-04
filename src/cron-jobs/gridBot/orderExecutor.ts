@@ -225,7 +225,7 @@ export async function placeOrder(params: OrderParams, testingMode: boolean = fal
       token_from_amount: amount,
       token_to_address: toToken.address,
       token_to_symbol: toToken.symbol,
-      token_to_amount: parseFloat(dstMinAmountDecimal).toFixed(toToken.decimals),
+      token_to_amount: '0',
       usd_volume: 0,
       execution_price: 0,
       pool_id: null,
