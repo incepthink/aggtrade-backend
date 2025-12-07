@@ -64,66 +64,127 @@ export function getBotWallet(wallets: BotWallet[], index: number): BotWallet | u
 }
 
 /**
- * Get token balance for a wallet
+ * Get token balance for a wallet with retry logic
+ * Handles intermittent RPC failures with exponential backoff
  */
 export async function getTokenBalance(
   provider: ethers.Provider,
   tokenAddress: string,
   ownerAddress: string,
-  isNative: boolean = false
+  isNative: boolean = false,
+  maxRetries: number = 3,
+  retryDelayMs: number = 1000
 ): Promise<bigint> {
-  if (isNative || tokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') {
-    return await provider.getBalance(ownerAddress)
-  } else {
-    const ERC20_ABI = [
-      'function balanceOf(address account) view returns (uint256)'
-    ]
-    const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, provider)
-    return await tokenContract.balanceOf(ownerAddress)
+  let lastError: Error | null = null
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      if (isNative || tokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') {
+        return await provider.getBalance(ownerAddress)
+      } else {
+        const ERC20_ABI = [
+          'function balanceOf(address account) view returns (uint256)'
+        ]
+        const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, provider)
+        return await tokenContract.balanceOf(ownerAddress)
+      }
+    } catch (error: any) {
+      lastError = error
+
+      // Check if it's a server error that should be retried
+      const shouldRetry =
+        error?.code === 'SERVER_ERROR' ||
+        error?.message?.includes('500') ||
+        error?.message?.includes('Internal Server Error')
+
+      if (shouldRetry && attempt < maxRetries) {
+        const delay = retryDelayMs * Math.pow(2, attempt - 1) // Exponential backoff
+        console.log(`[Bot Wallet Manager] RPC error (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`)
+        await new Promise(resolve => setTimeout(resolve, delay))
+        continue
+      }
+
+      // If not retryable or max retries reached, throw
+      throw error
+    }
   }
+
+  // Should never reach here, but TypeScript needs this
+  throw lastError || new Error('Failed to get token balance after retries')
 }
 
 /**
- * Check and approve token if needed
+ * Check and approve token if needed with retry logic
+ * Handles intermittent RPC failures with exponential backoff
  */
 export async function ensureTokenApproval(
   wallet: ethers.Wallet,
   tokenAddress: string,
   spenderAddress: string,
   amountWei: string,
-  isNative: boolean = false
+  isNative: boolean = false,
+  maxRetries: number = 3,
+  retryDelayMs: number = 1000
 ): Promise<{ needsApproval: boolean; txHash?: string }> {
   // Native ETH doesn't need approval
   if (isNative || tokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') {
     return { needsApproval: false }
   }
 
-  const ERC20_ABI = [
-    'function approve(address spender, uint256 amount) returns (bool)',
-    'function allowance(address owner, address spender) view returns (uint256)'
-  ]
+  let lastError: Error | null = null
 
-  const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, wallet)
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const ERC20_ABI = [
+        'function approve(address spender, uint256 amount) returns (bool)',
+        'function allowance(address owner, address spender) view returns (uint256)'
+      ]
 
-  // Check current allowance
-  const currentAllowance = await tokenContract.allowance(wallet.address, spenderAddress)
+      const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, wallet)
 
-  console.log(`[Token Approval] Current allowance: ${currentAllowance.toString()}`)
-  console.log(`[Token Approval] Required amount: ${amountWei}`)
+      // Check current allowance
+      const currentAllowance = await tokenContract.allowance(wallet.address, spenderAddress)
 
-  if (currentAllowance < BigInt(amountWei)) {
-    console.log('[Token Approval] Insufficient allowance, approving...')
+      console.log(`[Token Approval] Current allowance: ${currentAllowance.toString()}`)
+      console.log(`[Token Approval] Required amount: ${amountWei}`)
 
-    // Approve unlimited amount (common pattern for bots)
-    const approvalTx = await tokenContract.approve(spenderAddress, ethers.MaxUint256)
-    console.log(`[Token Approval] Approval tx hash: ${approvalTx.hash}`)
+      if (currentAllowance < BigInt(amountWei)) {
+        console.log('[Token Approval] Insufficient allowance, approving...')
 
-    const receipt = await approvalTx.wait()
-    console.log(`[Token Approval] Approved in block ${receipt?.blockNumber}`)
+        // Approve unlimited amount (common pattern for bots)
+        const approvalTx = await tokenContract.approve(spenderAddress, ethers.MaxUint256)
+        console.log(`[Token Approval] Approval tx hash: ${approvalTx.hash}`)
 
-    return { needsApproval: true, txHash: approvalTx.hash }
+        const receipt = await approvalTx.wait()
+        console.log(`[Token Approval] Approved in block ${receipt?.blockNumber}`)
+
+        return { needsApproval: true, txHash: approvalTx.hash }
+      }
+
+      console.log('[Token Approval] Sufficient allowance already exists')
+      return { needsApproval: false }
+
+    } catch (error: any) {
+      lastError = error
+
+      // Check if it's a server error that should be retried
+      const shouldRetry =
+        error?.code === 'SERVER_ERROR' ||
+        error?.message?.includes('500') ||
+        error?.message?.includes('Internal Server Error')
+
+      if (shouldRetry && attempt < maxRetries) {
+        const delay = retryDelayMs * Math.pow(2, attempt - 1) // Exponential backoff
+        console.log(`[Token Approval] RPC error (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`)
+        await new Promise(resolve => setTimeout(resolve, delay))
+        continue
+      }
+
+      // If not retryable or max retries reached, throw
+      throw error
+    }
   }
 
-  console.log('[Token Approval] Sufficient allowance already exists')
-  return { needsApproval: false }
+  // Should never reach here, but TypeScript needs this
+  throw lastError || new Error('Failed to ensure token approval after retries')
 }

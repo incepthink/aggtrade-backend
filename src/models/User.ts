@@ -57,21 +57,61 @@ class User
 
   // Static method to create or get user
   static async findOrCreateUser(walletAddress: string, chainId: number = 747474) {
-    const [user, created] = await this.findOrCreate({
-      where: {
-        wallet_address: walletAddress.toLowerCase(),
-        chain_id: chainId
-      },
-      defaults: {
-        wallet_address: walletAddress.toLowerCase(),
-        chain_id: chainId,
-        is_active: true,
-        token_addresses: [],
-        last_balance_check: null
+    // First try to find existing user to avoid unnecessary creates
+    const existingUser = await this.findByWallet(walletAddress, chainId)
+    if (existingUser) {
+      return { user: existingUser, created: false }
+    }
+
+    // User doesn't exist, try to create with transaction and retry logic
+    const maxRetries = 3
+    let lastError: any = null
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const [user, created] = await this.findOrCreate({
+          where: {
+            wallet_address: walletAddress.toLowerCase(),
+            chain_id: chainId
+          },
+          defaults: {
+            wallet_address: walletAddress.toLowerCase(),
+            chain_id: chainId,
+            is_active: true,
+            token_addresses: [],
+            last_balance_check: null
+          }
+        })
+
+        return { user, created }
+      } catch (error: any) {
+        lastError = error
+
+        // If it's a lock timeout or duplicate key error, retry
+        if (error.name === 'SequelizeDatabaseError' &&
+            (error.parent?.code === 'ER_LOCK_WAIT_TIMEOUT' ||
+             error.parent?.code === 'ER_DUP_ENTRY')) {
+
+          // Wait with exponential backoff before retry
+          const waitTime = Math.min(100 * Math.pow(2, attempt - 1), 1000)
+          await new Promise(resolve => setTimeout(resolve, waitTime))
+
+          // Try finding again in case another process created it
+          const retryUser = await this.findByWallet(walletAddress, chainId)
+          if (retryUser) {
+            return { user: retryUser, created: false }
+          }
+
+          continue
+        }
+
+        // For other errors, throw immediately
+        throw error
       }
-    })
-    
-    return { user, created }
+    }
+
+    // All retries failed, throw the last error
+    throw lastError
   }
 
   // Static method to check if balance needs update (checks minute-level precision)
@@ -137,10 +177,10 @@ class User
 
     // Normalize addresses to lowercase
     const normalizedTokens = tokenAddresses.map(addr => addr.toLowerCase())
-    
+
     // Get existing tokens and merge with new ones (remove duplicates)
     const existingTokens = user.token_addresses || []
-    const uniqueTokens = [...new Set([...existingTokens, ...normalizedTokens])]
+    const uniqueTokens = Array.from(new Set([...existingTokens, ...normalizedTokens]))
     
     await user.update({ token_addresses: uniqueTokens })
     

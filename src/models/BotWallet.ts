@@ -14,7 +14,15 @@ export interface BotWalletAttributes {
   usdc: string
   eth: string
   weth: string
+  wbtc: string
+  pol: string
+  ausd: string
+  btck: string
   sushi: string
+  frxusd: string
+  sfrxusd: string
+  usol: string
+  wsteth: string
   placed_initial_orders: number
   trading_pool: string
   created_at?: Date
@@ -31,7 +39,15 @@ class BotWallet
   declare usdc: string
   declare eth: string
   declare weth: string
+  declare wbtc: string
+  declare pol: string
+  declare ausd: string
+  declare btck: string
   declare sushi: string
+  declare frxusd: string
+  declare sfrxusd: string
+  declare usol: string
+  declare wsteth: string
   declare placed_initial_orders: number
   declare trading_pool: string
   declare created_at: CreationOptional<Date>
@@ -66,7 +82,7 @@ class BotWallet
   // Static method to update token balance
   static async updateTokenBalance(
     walletAddress: string,
-    tokenSymbol: 'usdc' | 'eth' | 'weth' | 'sushi' | string,
+    tokenSymbol: 'usdc' | 'eth' | 'weth' | 'wbtc' | 'pol' | 'ausd' | 'btck' | 'sushi' | 'frxusd' | 'sfrxusd' | 'usol' | 'wsteth' | string,
     balance: string
   ) {
     return this.update(
@@ -82,7 +98,7 @@ class BotWallet
   // Static method to update multiple token balances at once
   static async updateMultipleBalances(
     walletAddress: string,
-    balances: Partial<{ usdc: string; eth: string; weth: string; sushi: string }>
+    balances: Partial<{ usdc: string; eth: string; weth: string; wbtc: string; pol: string; ausd: string; btck: string; sushi: string; frxusd: string; sfrxusd: string; usol: string; wsteth: string }>
   ) {
     return this.update(
       balances,
@@ -104,7 +120,15 @@ class BotWallet
       usdc: wallet.usdc,
       eth: wallet.eth,
       weth: wallet.weth,
-      sushi: wallet.sushi
+      wbtc: wallet.wbtc,
+      pol: wallet.pol,
+      ausd: wallet.ausd,
+      btck: wallet.btck,
+      sushi: wallet.sushi,
+      frxusd: wallet.frxusd,
+      sfrxusd: wallet.sfrxusd,
+      usol: wallet.usol,
+      wsteth: wallet.wsteth
     }
   }
 
@@ -120,7 +144,15 @@ class BotWallet
         usdc: '0',
         eth: '0',
         weth: '0',
+        wbtc: '0',
+        pol: '0',
+        ausd: '0',
+        btck: '0',
         sushi: '0',
+        frxusd: '0',
+        sfrxusd: '0',
+        usol: '0',
+        wsteth: '0',
         placed_initial_orders: 0,
         trading_pool: ''
       }
@@ -172,11 +204,59 @@ BotWallet.init(
       defaultValue: '0',
       comment: 'WETH token balance as string to handle large numbers'
     },
+    wbtc: {
+      type: DataTypes.STRING(78),
+      allowNull: false,
+      defaultValue: '0',
+      comment: 'WBTC token balance as string to handle large numbers'
+    },
+    pol: {
+      type: DataTypes.STRING(78),
+      allowNull: false,
+      defaultValue: '0',
+      comment: 'POL token balance as string to handle large numbers'
+    },
+    ausd: {
+      type: DataTypes.STRING(78),
+      allowNull: false,
+      defaultValue: '0',
+      comment: 'AUSD token balance as string to handle large numbers'
+    },
+    btck: {
+      type: DataTypes.STRING(78),
+      allowNull: false,
+      defaultValue: '0',
+      comment: 'BTCK token balance as string to handle large numbers'
+    },
     sushi: {
       type: DataTypes.STRING(78),
       allowNull: false,
       defaultValue: '0',
       comment: 'SUSHI token balance as string to handle large numbers'
+    },
+    frxusd: {
+      type: DataTypes.STRING(78),
+      allowNull: false,
+      defaultValue: '0',
+      comment: 'frxUSD token balance as string to handle large numbers'
+    },
+    sfrxusd: {
+      type: DataTypes.STRING(78),
+      allowNull: false,
+      defaultValue: '0',
+      comment: 'sFRXUSD token balance as string to handle large numbers'
+    },
+    usol: {
+      type: DataTypes.STRING(78),
+      allowNull: false,
+      defaultValue: '0',
+      comment: 'USOL token balance as string to handle large numbers'
+    },
+    wsteth: {
+      type: DataTypes.STRING(78),
+      allowNull: false,
+      defaultValue: '0',
+      comment: 'WSTETH token balance as string to handle large numbers'
     },
     placed_initial_orders: {
       type: DataTypes.INTEGER,

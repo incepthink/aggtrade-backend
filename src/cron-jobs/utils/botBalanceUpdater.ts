@@ -55,8 +55,6 @@ function getTrackedTokens(): TokenConfig[] {
              'trading_pool', 'created_at', 'updated_at'].includes(key)
   })
 
-  KatanaLogger.info(PREFIX, `Found ${tokenColumns.length} token columns: ${tokenColumns.join(', ')}`)
-
   // Convert column names to token configurations
   for (const column of tokenColumns) {
     try {
@@ -70,7 +68,6 @@ function getTrackedTokens(): TokenConfig[] {
           decimals: 18,
           isNative: true
         })
-        KatanaLogger.info(PREFIX, `Added native token: ${column} -> ETH`)
       } else {
         // Get token config from tokenPairs.config
         const tokenConfig = getToken(symbolUpperCase)
@@ -80,7 +77,6 @@ function getTrackedTokens(): TokenConfig[] {
           decimals: tokenConfig.decimals,
           isNative: tokenConfig.isNative || false
         })
-        KatanaLogger.info(PREFIX, `Added token: ${column} -> ${tokenConfig.symbol}`)
       }
     } catch (error) {
       KatanaLogger.warn(PREFIX, `Could not get token config for column '${column}', skipping`)
@@ -107,8 +103,6 @@ export async function updateWalletBalances(
   tokenColumnMapping?: Record<string, string>
 ): Promise<void> {
   try {
-    KatanaLogger.info(PREFIX, `Updating balances for wallet ${walletAddress}`)
-
     // Step 1: Get all tracked tokens
     const trackedTokens = getTrackedTokens()
 
@@ -128,8 +122,6 @@ export async function updateWalletBalances(
         )
 
         const balanceHuman = fromWei(balanceWei.toString(), token.decimals)
-
-        KatanaLogger.info(PREFIX, `${token.symbol}: ${balanceHuman}`)
 
         return {
           symbol: token.symbol,
@@ -167,8 +159,12 @@ export async function updateWalletBalances(
     if (Object.keys(updates).length > 0) {
       await BotWallet.updateMultipleBalances(walletAddress, updates)
 
-      KatanaLogger.info(PREFIX, `✅ Updated ${Object.keys(updates).length} token balances for wallet ${walletAddress}`)
-      KatanaLogger.info(PREFIX, `Balances: ${JSON.stringify(updates)}`)
+      // Format balances as "TOKEN1: 1.23, TOKEN2: 4.56"
+      const balancesSummary = Object.entries(updates)
+        .map(([col, bal]) => `${col.toUpperCase()}: ${bal}`)
+        .join(', ')
+
+      KatanaLogger.info(PREFIX, `✅ Updated ${Object.keys(updates).length} balances for ${walletAddress.slice(0, 8)}... | ${balancesSummary}`)
     } else {
       KatanaLogger.warn(PREFIX, 'No balances to update')
     }
@@ -193,8 +189,6 @@ export async function updateSpecificTokenBalances(
   tokenSymbols: string[]
 ): Promise<void> {
   try {
-    KatanaLogger.info(PREFIX, `Updating specific token balances for wallet ${walletAddress}: ${tokenSymbols.join(', ')}`)
-
     const updates: Record<string, string> = {}
 
     for (const symbol of tokenSymbols) {
@@ -216,8 +210,6 @@ export async function updateSpecificTokenBalances(
         const columnName = symbol.toLowerCase()
 
         updates[columnName] = balanceHuman
-
-        KatanaLogger.info(PREFIX, `${symbol}: ${balanceHuman}`)
       } catch (error) {
         KatanaLogger.error(PREFIX, `Failed to fetch balance for ${symbol}`, error)
       }
@@ -226,7 +218,13 @@ export async function updateSpecificTokenBalances(
     // Update database
     if (Object.keys(updates).length > 0) {
       await BotWallet.updateMultipleBalances(walletAddress, updates)
-      KatanaLogger.info(PREFIX, `✅ Updated ${Object.keys(updates).length} token balances`)
+
+      // Format balances as "TOKEN1: 1.23, TOKEN2: 4.56"
+      const balancesSummary = Object.entries(updates)
+        .map(([col, bal]) => `${col.toUpperCase()}: ${bal}`)
+        .join(', ')
+
+      KatanaLogger.info(PREFIX, `✅ Updated ${Object.keys(updates).length} balances for ${walletAddress.slice(0, 8)}... | ${balancesSummary}`)
     }
 
   } catch (error) {

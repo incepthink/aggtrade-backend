@@ -5,11 +5,11 @@ import { TokenConfig } from './types'
  * Add new tokens here to enable trading
  */
 export const TOKENS: Record<string, TokenConfig> = {
-  WETH: {
-    address: '0xEE7D8BCFb72bC1880D0Cf19822eB0A2e6577aB62',
-    symbol: 'WETH',
+  ETH: {
+    address: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    symbol: 'ETH',
     decimals: 18,
-    isNative: false
+    isNative: true
   },
   USDC: {
     address: '0x203A662b0BD271A6ed5a60EdFbd04bFce608FD36',
@@ -17,16 +17,64 @@ export const TOKENS: Record<string, TokenConfig> = {
     decimals: 6,
     isNative: false
   },
-  JitoSOL: {
-    address: '0x6c16e26013f2431e8b2e1ba7067ecccad0db6c52',
-    symbol: 'JitoSOL',
+  WETH: {
+    address: '0xEE7D8BCFb72bC1880D0Cf19822eB0A2e6577aB62',
+    symbol: 'WETH',
     decimals: 18,
     isNative: false
   },
-  LBTC: {
-    address: '0xecac9c5f704e954931349da37f60e39f515c11c1',
-    symbol: 'LBTC',
+  WBTC: {
+    address: '0x0913DA6Da4b42f538B445599b46Bb4622342Cf52',
+    symbol: 'WBTC',
     decimals: 8,
+    isNative: false
+  },
+  POL: {
+    address: '0xb24e3035d1FCBC0E43CF3143C3Fd92E53df2009b',
+    symbol: 'POL',
+    decimals: 18,
+    isNative: false
+  },
+  AUSD: {
+    address: '0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a',
+    symbol: 'AUSD',
+    decimals: 6,
+    isNative: false
+  },
+  BTCK: {
+    address: '0xB0F70C0bD6FD87dbEb7C10dC692a2a6106817072',
+    symbol: 'BTCK',
+    decimals: 8,
+    isNative: false
+  },
+  SUSHI: {
+    address: '0x17BFF452dae47e07CeA877Ff0E1aba17eB62b0aB',
+    symbol: 'SUSHI',
+    decimals: 18,
+    isNative: false
+  },
+  FRXUSD: {
+    address: '0x80Eede496655FB9047dd39d9f418d5483ED600df',
+    symbol: 'FRXUSD',
+    decimals: 18,
+    isNative: false
+  },
+  SFRXUSD: {
+    address: '0x5Bff88cA1442c2496f7E475E9e7786383Bc070c0',
+    symbol: 'SFRXUSD',
+    decimals: 18,
+    isNative: false
+  },
+  USOL: {
+    address: '0x9B8Df6E244526ab5F6e6400d331DB28C8fdDdb55',
+    symbol: 'USOL',
+    decimals: 18,
+    isNative: false
+  },
+  WSTETH: {
+    address: '0x7Fb4D0f51544F24F385a421Db6e7D4fC71Ad8e5C',
+    symbol: 'WSTETH',
+    decimals: 18,
     isNative: false
   }
 }
@@ -41,7 +89,7 @@ export const BASE_CURRENCIES = ['USDC', 'ETH'] as const
  * Target tokens - tokens to trade (buy/sell)
  * Each target will be paired with base currencies based on balance
  */
-export const TARGET_TOKENS = ['ETH', 'JitoSOL', 'LBTC'] as const
+export const TARGET_TOKENS = ['WETH', 'WBTC', 'POL', 'AUSD', 'BTCK', 'SUSHI', 'FRXUSD', 'SFRXUSD', 'USOL', 'WSTETH'] as const
 
 /**
  * Get all available tokens

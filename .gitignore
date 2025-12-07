@@ -174,3 +174,6 @@ dist
 
 # Finder (MacOS) folder config
 .DS_Store
+
+# Wallet generation output (contains private keys)
+src/scripts/wallets.json

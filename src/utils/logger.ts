@@ -80,8 +80,7 @@ export class KatanaLogger {
   }
 
   private static formatMessage(prefix: string, message: string, data?: any): string {
-    const timestamp = new Date().toISOString();
-    const baseMessage = `${timestamp} ${prefix} ${message}`;
+    const baseMessage = `${prefix} ${message}`;
 
     if (data) {
       const sanitized = this.sanitizeData(data);
@@ -99,8 +98,7 @@ export class KatanaLogger {
   }
 
   static error(prefix: string, message: string, error?: any, data?: any): void {
-    const timestamp = new Date().toISOString();
-    const baseMessage = `${timestamp} ${prefix} ${message}`;
+    const baseMessage = `${prefix} ${message}`;
 
     if (error) {
       const sanitizedError = this.sanitizeError(error);

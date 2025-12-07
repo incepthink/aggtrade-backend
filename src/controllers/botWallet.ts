@@ -1,49 +1,123 @@
 import type { Request, Response, NextFunction } from "express";
 import BotWallet from "../models/BotWallet";
 
-// CREATE - Create a new bot wallet
+// CREATE - Create a new bot wallet (accepts single wallet or array of wallets)
 export const createBotWallet = async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const { wallet_address, wallet_index, usdc, eth, weth, sushi, placed_initial_orders, trading_pool } = req.body;
+        const body = req.body;
 
-        // Validate required fields
-        if (!wallet_address || !wallet_index) {
-            return res.status(400).json({ error: 'wallet_address and wallet_index are required' });
+        // Check if body is an array or single object
+        const isArray = Array.isArray(body);
+        const wallets = isArray ? body : [body];
+
+        // Validate that we have at least one wallet
+        if (wallets.length === 0) {
+            return res.status(400).json({ error: 'At least one wallet is required' });
         }
 
-        // Validate wallet_index range
-        if (wallet_index < 1 || wallet_index > 100) {
-            return res.status(400).json({ error: 'wallet_index must be between 1 and 100' });
+        const results: any[] = [];
+        const errors: any[] = [];
+
+        for (const walletData of wallets) {
+            const { wallet_address, wallet_index, usdc, eth, weth, sushi, placed_initial_orders, trading_pool } = walletData;
+
+            try {
+                // Validate required fields
+                if (!wallet_address || !wallet_index) {
+                    errors.push({
+                        wallet_address,
+                        wallet_index,
+                        error: 'wallet_address and wallet_index are required'
+                    });
+                    continue;
+                }
+
+                // Validate wallet_index range
+                if (wallet_index < 1 || wallet_index > 100) {
+                    errors.push({
+                        wallet_address,
+                        wallet_index,
+                        error: 'wallet_index must be between 1 and 100'
+                    });
+                    continue;
+                }
+
+                // Check if wallet already exists
+                const existingWallet = await BotWallet.findByAddress(wallet_address);
+                if (existingWallet) {
+                    errors.push({
+                        wallet_address,
+                        wallet_index,
+                        error: 'Wallet already exists'
+                    });
+                    continue;
+                }
+
+                // Check if wallet_index is already taken
+                const existingIndex = await BotWallet.findByIndex(wallet_index);
+                if (existingIndex) {
+                    errors.push({
+                        wallet_address,
+                        wallet_index,
+                        error: 'Wallet index already taken'
+                    });
+                    continue;
+                }
+
+                // Create wallet
+                const wallet = await BotWallet.create({
+                    wallet_address: wallet_address.toLowerCase(),
+                    wallet_index,
+                    usdc: usdc || '0',
+                    eth: eth || '0',
+                    weth: weth || '0',
+                    sushi: sushi || '0',
+                    placed_initial_orders: placed_initial_orders || 0,
+                    trading_pool: trading_pool || ''
+                });
+
+                results.push(wallet);
+
+            } catch (error) {
+                errors.push({
+                    wallet_address,
+                    wallet_index,
+                    error: error instanceof Error ? error.message : 'Unknown error'
+                });
+            }
         }
 
-        // Check if wallet already exists
-        const existingWallet = await BotWallet.findByAddress(wallet_address);
-        if (existingWallet) {
-            return res.status(409).json({ error: 'Wallet already exists' });
+        // Determine response status
+        const allFailed = results.length === 0;
+        const someFailed = errors.length > 0;
+        const status = allFailed ? 400 : (someFailed ? 207 : 201); // 207 = Multi-Status
+
+        // Return appropriate response
+        if (isArray) {
+            return res.status(status).json({
+                message: allFailed
+                    ? 'All wallet creations failed'
+                    : someFailed
+                        ? 'Some wallets created successfully'
+                        : 'All wallets created successfully',
+                created: results.length,
+                failed: errors.length,
+                wallets: results,
+                errors: errors.length > 0 ? errors : undefined
+            });
+        } else {
+            // Single wallet request
+            if (results.length > 0) {
+                return res.status(201).json({
+                    message: 'Bot wallet created successfully',
+                    wallet: results[0]
+                });
+            } else {
+                return res.status(400).json({
+                    error: errors[0]?.error || 'Failed to create wallet'
+                });
+            }
         }
-
-        // Check if wallet_index is already taken
-        const existingIndex = await BotWallet.findByIndex(wallet_index);
-        if (existingIndex) {
-            return res.status(409).json({ error: 'Wallet index already taken' });
-        }
-
-        // Create wallet
-        const wallet = await BotWallet.create({
-            wallet_address: wallet_address.toLowerCase(),
-            wallet_index,
-            usdc: usdc || '0',
-            eth: eth || '0',
-            weth: weth || '0',
-            sushi: sushi || '0',
-            placed_initial_orders: placed_initial_orders || 0,
-            trading_pool: trading_pool || ''
-        });
-
-        return res.status(201).json({
-            message: 'Bot wallet created successfully',
-            wallet
-        });
 
     } catch (error) {
         if (error instanceof Error) {
