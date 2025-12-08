@@ -23,6 +23,7 @@ export interface SushiswapActivityAttributes {
   token_to_symbol: string
   token_to_amount: string
   usd_volume: number
+  fees_usd: number | null
   execution_price: number
   pool_id: string | null
   order_id: string | null
@@ -56,6 +57,7 @@ class SushiswapActivity
   declare token_to_symbol: string
   declare token_to_amount: string
   declare usd_volume: number
+  declare fees_usd: number | null
   declare execution_price: number
   declare pool_id: string | null
   declare order_id: string | null
@@ -138,6 +140,11 @@ SushiswapActivity.init(
     usd_volume: {
       type: DataTypes.DECIMAL(30, 6),
       allowNull: false,
+      defaultValue: 0
+    },
+    fees_usd: {
+      type: DataTypes.DECIMAL(20, 8),
+      allowNull: true,
       defaultValue: 0
     },
     execution_price: {

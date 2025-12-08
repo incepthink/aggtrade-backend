@@ -14,6 +14,28 @@ export interface QuoteRequest {
   slippage: number  // Percentage (e.g., 0.5 for 0.5%)
 }
 
+// Pool fee information
+export interface PoolFeeInfo {
+  poolAddress: Address
+  feeTier: number  // e.g., 100 = 0.01%, 500 = 0.05%, 3000 = 0.3%, 10000 = 1%
+  feePercentage: string  // e.g., "0.3%"
+}
+
+// Fee breakdown for multi-hop swaps
+export interface FeeBreakdown {
+  poolAddress: Address
+  feeAmount: string  // Wei amount
+  feeTier: number
+  feePercentage: string
+}
+
+// Total fees calculation
+export interface TotalFeesInfo {
+  totalFeeAmount: string  // Total fees in Wei
+  totalFeePercentage: number  // Total fee percentage (compounded for multi-hop)
+  feeBreakdown: FeeBreakdown[]
+}
+
 // Quote response data
 export interface QuoteResponse {
   amountOut: string
@@ -24,6 +46,7 @@ export interface QuoteResponse {
   tokenTo: string
   status: string
   routerAddress: string
+  poolFees: PoolFeeInfo[]
 }
 
 // Execute request body (extends QuoteRequest with userAddress)
@@ -36,6 +59,8 @@ export interface ExecuteResponse {
   to: string  // Router contract address
   data: string  // Calldata for transaction
   value: string  // ETH value to send
+  poolFees: PoolFeeInfo[]
+  fees: TotalFeesInfo | null
 }
 
 // Yearn Finance - Deposit request body

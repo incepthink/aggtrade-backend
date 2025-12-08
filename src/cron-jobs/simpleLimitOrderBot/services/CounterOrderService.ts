@@ -275,7 +275,7 @@ export class CounterOrderService {
 
       // Validate minimum order value
       const counterAmount = toAmountHuman
-      const counterValueUSD = parseFloat(counterAmount) * executionPriceUSD
+      const counterValueUSD = parseFloat(counterAmount) * toTokenPrice
 
       if (counterValueUSD < this.config.minOrderSizeUsd) {
         KatanaLogger.warn(

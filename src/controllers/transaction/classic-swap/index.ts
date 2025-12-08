@@ -2,7 +2,8 @@ import type { Request, Response, NextFunction } from "express"
 import { ChainId } from "sushi"
 import { getQuote, getSwap } from "sushi/evm"
 import type { QuoteRequest, ExecuteRequest } from "../../../types/transaction"
-import { Address } from "viem"
+import { Address, decodeAbiParameters, parseAbiParameters } from "viem"
+import { extractPoolFeeTiers } from "./poolFeeExtractor"
 
 /**
  * POST /transaction/classic-swap/quote
@@ -70,6 +71,23 @@ export const getClassicSwapQuote = async (
     })
 
     const routerAddress = dummySwap.tx?.to || ''
+    console.log(dummySwap, quote);
+
+    // Extract pool fee tiers from transaction data
+    let poolFees: any[] = []
+    if (dummySwap.tx?.data) {
+      try {
+        // Get token addresses to exclude from pool search
+        const excludeAddresses = [
+          tokenIn.address.toLowerCase(),
+          tokenOut.address.toLowerCase(),
+        ]
+        poolFees = await extractPoolFeeTiers(dummySwap.tx.data, excludeAddresses)
+        console.log('[Classic Swap Quote] Pool fees:', poolFees)
+      } catch (error) {
+        console.error('[Classic Swap Quote] Error extracting pool fees:', error)
+      }
+    }
 
     // Format response
     return res.status(200).json({
@@ -82,7 +100,12 @@ export const getClassicSwapQuote = async (
         tokenFrom: quote.tokenFrom?.address || tokenIn.address,
         tokenTo: quote.tokenTo?.address || tokenOut.address,
         status: quote.status || 'success',
-        routerAddress
+        routerAddress,
+        poolFees: poolFees.map(pf => ({
+          poolAddress: pf.poolAddress,
+          feeTier: pf.feeTier,
+          feePercentage: pf.feePercentage
+        }))
       }
     })
 
@@ -167,13 +190,52 @@ export const executeClassicSwap = async (
       })
     }
 
+    // Extract pool fee tiers from transaction data
+    let poolFees: any[] = []
+    let totalFees: any = null
+    try {
+      // Get token addresses to exclude from pool search
+      const excludeAddresses = [
+        tokenIn.address.toLowerCase(),
+        tokenOut.address.toLowerCase(),
+      ]
+      poolFees = await extractPoolFeeTiers(swap.tx.data, excludeAddresses)
+      console.log('[Classic Swap Execute] Pool fees:', poolFees)
+
+      // Calculate total fees if we have pool fee info
+      if (poolFees.length > 0 && swap.amountIn) {
+        const { calculateTotalFees } = await import('./poolFeeExtractor')
+        const amountInBigInt = BigInt(swap.amountIn)
+        const feeCalculation = calculateTotalFees(amountInBigInt, poolFees)
+
+        totalFees = {
+          totalFeeAmount: feeCalculation.totalFeeAmount.toString(),
+          totalFeePercentage: feeCalculation.totalFeePercentage,
+          feeBreakdown: feeCalculation.feeBreakdown.map(fb => ({
+            poolAddress: fb.pool,
+            feeAmount: fb.feeAmount.toString(),
+            feeTier: fb.feeTier,
+            feePercentage: `${fb.feeTier / 10000}%`
+          }))
+        }
+      }
+    } catch (error) {
+      console.error('[Classic Swap Execute] Error extracting pool fees:', error)
+    }
+
     // Format response
     return res.status(200).json({
       message: 'Swap transaction generated successfully',
       data: {
         to: swap.tx.to,
         data: swap.tx.data,
-        value: swap.tx.value?.toString() || '0'
+        value: swap.tx.value?.toString() || '0',
+        poolFees: poolFees.map(pf => ({
+          poolAddress: pf.poolAddress,
+          feeTier: pf.feeTier,
+          feePercentage: pf.feePercentage
+        })),
+        fees: totalFees
       }
     })
 
