@@ -30,7 +30,10 @@ export class OrderStatusService {
   ): 'pending' | 'partial' | 'filled' | 'expired' | 'canceled' {
     switch (blockchainStatus) {
       case 'Open':
-        return progress > 0 && progress < 100 ? 'partial' : 'pending'
+        // Order is fully filled at 100% progress even if status is still "Open"
+        if (progress === 100) return 'filled'
+        if (progress > 0 && progress < 100) return 'partial'
+        return 'pending'
       case 'Completed':
         return 'filled'
       case 'Canceled':
