@@ -56,7 +56,7 @@ function weiToEth(wei: string): string | null {
 async function getEtherPriceSushi(): Promise<number | null> {
   const weth = "0xee7d8bcfb72bc1880d0cf19822eb0a2e6577ab62";
 
-  // Wrap API call with retry logic
+  // Wrap API call with retry logic (5 retries for rate limit resilience)
   const result = await retryWithBackoff(
     async () => {
       const { data } = await axios.get(
@@ -72,8 +72,8 @@ async function getEtherPriceSushi(): Promise<number | null> {
       }
       return price;
     },
-    3,
-    1000,
+    5,
+    1500,
     'Sushi ETH price'
   );
 
@@ -87,7 +87,7 @@ async function getPriceSushi(address: string): Promise<number | null> {
     return 0;
   }
 
-  // Wrap API call with retry logic
+  // Wrap API call with retry logic (5 retries for rate limit resilience)
   const result = await retryWithBackoff(
     async () => {
       const { data } = await axios.get(
@@ -103,8 +103,8 @@ async function getPriceSushi(address: string): Promise<number | null> {
       }
       return price;
     },
-    3,
-    1000,
+    5,
+    1500,
     `Sushi price for ${address.substring(0, 10)}...`
   );
 
@@ -137,7 +137,7 @@ export async function getErc20BalanceUSD(walletAddress: string): Promise<number 
         // Get decimals for the token
         const decimals = decimalsMap.get(lowerCaseAddress) || 18;
 
-        // Fetch balance with retry, and price in parallel
+        // Fetch balance with retry, and price in parallel (5 retries for rate limit resilience)
         const [balanceWei, price] = await Promise.all([
           retryWithBackoff(
             async () => {
@@ -152,8 +152,8 @@ export async function getErc20BalanceUSD(walletAddress: string): Promise<number 
 
               return res.data.result;
             },
-            3,
-            1000,
+            5,
+            1500,
             `Token balance for ${tokenAddress.substring(0, 10)}...`
           ),
           getPriceSushi(tokenAddress)
@@ -221,7 +221,7 @@ export async function getErc20BalanceUSD(walletAddress: string): Promise<number 
 
 async function getEtherBalanceUSD(walletAddress: string): Promise<number | null> {
   try {
-    // Fetch ETH balance from Etherscan with retry
+    // Fetch ETH balance from Etherscan with retry (5 retries for rate limit resilience)
     const etherBalWei = await retryWithBackoff(
       async () => {
         const etherscanUrl = `https://api.etherscan.io/v2/api?chainid=747474&module=account&action=balance&address=${walletAddress}&tag=latest&apikey=${process.env.ETHERSCAN_API}`;
@@ -233,8 +233,8 @@ async function getEtherBalanceUSD(walletAddress: string): Promise<number | null>
 
         return etherscanRes.data.result;
       },
-      3,
-      1000,
+      5,
+      1500,
       'Etherscan ETH balance'
     );
 

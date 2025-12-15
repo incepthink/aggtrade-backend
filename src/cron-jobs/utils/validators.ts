@@ -2,7 +2,32 @@
 // Validation utilities for safe data conversion and API response handling
 
 /**
+ * Checks if an error is a rate limit error
+ * @param error - Error object to check
+ * @returns true if rate limit error, false otherwise
+ */
+function isRateLimitError(error: any): boolean {
+  const errorMessage = error?.message?.toLowerCase() || '';
+  const errorString = String(error).toLowerCase();
+
+  // Common rate limit error patterns
+  const rateLimitPatterns = [
+    'rate limit',
+    'too many requests',
+    'max calls per sec',
+    'calls per second',
+    '429',
+    'quota exceeded'
+  ];
+
+  return rateLimitPatterns.some(pattern =>
+    errorMessage.includes(pattern) || errorString.includes(pattern)
+  );
+}
+
+/**
  * Retry utility with exponential backoff for API calls
+ * Includes intelligent rate limit detection and handling
  * @param fn - Async function to retry
  * @param maxRetries - Maximum number of retry attempts (default 3)
  * @param baseDelay - Base delay in milliseconds (default 1000)
@@ -19,11 +44,30 @@ export async function retryWithBackoff<T>(
     try {
       return await fn();
     } catch (error: any) {
+      const isRateLimit = isRateLimitError(error);
+
+      // For rate limit errors, use extended retries with longer delays
+      if (isRateLimit) {
+        const rateLimitDelay = 2000 * Math.pow(2, attempt); // Start at 2s, then 4s, 8s...
+
+        if (attempt < maxRetries - 1) {
+          console.log(`[Retry] ${operationName} hit rate limit (attempt ${attempt + 1}/${maxRetries}), waiting ${rateLimitDelay}ms before retry`);
+          await new Promise(resolve => setTimeout(resolve, rateLimitDelay));
+          continue;
+        }
+      }
+
+      // Last attempt - check if we should fail or continue
       if (attempt === maxRetries - 1) {
-        console.warn(`[Retry] ${operationName} failed after ${maxRetries} attempts:`, error?.message);
+        if (isRateLimit) {
+          console.warn(`[Retry] ${operationName} failed due to rate limit after ${maxRetries} attempts. This may succeed in next batch.`);
+        } else {
+          console.warn(`[Retry] ${operationName} failed after ${maxRetries} attempts:`, error?.message);
+        }
         return null;
       }
 
+      // Standard exponential backoff for non-rate-limit errors
       const delay = baseDelay * Math.pow(2, attempt);
       console.log(`[Retry] ${operationName} attempt ${attempt + 1}/${maxRetries} failed, retrying in ${delay}ms`);
       await new Promise(resolve => setTimeout(resolve, delay));

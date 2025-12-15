@@ -153,6 +153,10 @@ export async function placeInitialOrders(
 
     KatanaLogger.info(PREFIX, `Starting from pair ${startFrom + 1}/5`)
 
+    let successfulPairs = 0
+    let failedPairs = 0
+    let skippedPairs: number[] = []
+
     for (let i = startFrom; i < totalPairs; i++) {
       KatanaLogger.info(PREFIX, `\n${'='.repeat(60)}`)
       KatanaLogger.info(PREFIX, `Attempting pair ${i + 1}/5...`)
@@ -161,8 +165,10 @@ export async function placeInitialOrders(
       // Safety check
       const isSafe = await verifyNoBlockchainDuplicates(wallet, i)
       if (!isSafe) {
-        KatanaLogger.error(PREFIX, `Safety check failed for pair ${i + 1}! HALTING`)
-        throw new Error(`Blockchain safety check failed`)
+        KatanaLogger.warn(PREFIX, `Safety check failed for pair ${i + 1}! Skipping this pair...`)
+        skippedPairs.push(i + 1)
+        failedPairs++
+        continue // Skip this pair and continue with the rest
       }
 
       // Acquire lock
@@ -190,9 +196,11 @@ export async function placeInitialOrders(
         KatanaLogger.error(PREFIX, `Decrementing counter back from ${i + 1} to ${i}`)
 
         await WalletService.decrementPlacedOrdersCounter(wallet.address, i + 1)
+        failedPairs++
         break
       }
 
+      successfulPairs++
       KatanaLogger.info(PREFIX, `Pair ${i + 1}/5 completed`)
 
       if (i < totalPairs - 1) {
@@ -200,11 +208,24 @@ export async function placeInitialOrders(
       }
     }
 
+    // Summary
+    KatanaLogger.info(PREFIX, `\n${'='.repeat(60)}`)
+    KatanaLogger.info(PREFIX, `Initial order placement summary for wallet ${wallet.index}:`)
+    KatanaLogger.info(PREFIX, `  ✅ Successful pairs: ${successfulPairs}`)
+    KatanaLogger.info(PREFIX, `  ❌ Failed pairs: ${failedPairs}`)
+    if (skippedPairs.length > 0) {
+      KatanaLogger.info(PREFIX, `  ⏭️  Skipped pairs (safety check failed): ${skippedPairs.join(', ')}`)
+    }
+
     // Check completion
     const finalCount = await WalletService.getWalletRecord(wallet.address)
     if (finalCount && finalCount.placed_initial_orders === 5) {
-      KatanaLogger.info(PREFIX, `\nAll 5 pairs placed successfully!`)
+      KatanaLogger.info(PREFIX, `\n🎉 All 5 pairs placed successfully!`)
+    } else if (finalCount && finalCount.placed_initial_orders > startFrom) {
+      KatanaLogger.info(PREFIX, `\n✅ Placed ${finalCount.placed_initial_orders - startFrom} additional pair(s)`)
+      KatanaLogger.info(PREFIX, `📊 Total placed: ${finalCount.placed_initial_orders}/5`)
     }
+    KatanaLogger.info(PREFIX, `${'='.repeat(60)}`)
 
   } catch (error) {
     KatanaLogger.error(PREFIX, `Initial order placement failed for wallet ${wallet.index}`, error)

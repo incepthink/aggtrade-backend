@@ -46,9 +46,19 @@ async function processWallet(
       // Place remaining initial order pairs
       KatanaLogger.info(PREFIX, 'Placing initial order pairs...')
       await placeInitialOrders(wallet, botWalletRecord)
-    } else {
-      // Check existing orders and place counter-orders
-      KatanaLogger.info(PREFIX, 'Initial orders complete. Checking order status...')
+
+      // After attempting to place initial orders, refresh the record
+      const updatedRecord = await WalletService.getWalletRecord(wallet.address)
+      if (updatedRecord) {
+        botWalletRecord.placed_initial_orders = updatedRecord.placed_initial_orders
+      }
+    }
+
+    // Always check for counter-orders if we have any placed pairs
+    // This ensures that even if not all 5 pairs are complete,
+    // we can still place counter orders for filled orders from complete pairs
+    if (botWalletRecord.placed_initial_orders > 0) {
+      KatanaLogger.info(PREFIX, 'Checking order status and placing counter-orders...')
       await checkCounterOrders(wallet, botWalletRecord)
     }
 
