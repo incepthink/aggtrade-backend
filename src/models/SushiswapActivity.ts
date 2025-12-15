@@ -25,6 +25,7 @@ export interface SushiswapActivityAttributes {
   usd_volume: number
   fees_usd: number | null
   execution_price: number
+  price_impact: number
   pool_id: string | null
   order_id: string | null
   filled_src_amount: string | null
@@ -59,6 +60,7 @@ class SushiswapActivity
   declare usd_volume: number
   declare fees_usd: number | null
   declare execution_price: number
+  declare price_impact: number
   declare pool_id: string | null
   declare order_id: string | null
   declare filled_src_amount: string | null
@@ -150,6 +152,12 @@ SushiswapActivity.init(
     execution_price: {
       type: DataTypes.DECIMAL(30, 18),
       allowNull: false
+    },
+    price_impact: {
+      type: DataTypes.DECIMAL(20, 18),
+      allowNull: false,
+      defaultValue: 0,
+      comment: 'Price impact as a decimal (e.g., 0.0005 = 0.05%)'
     },
     pool_id: {
       type: DataTypes.STRING(42),

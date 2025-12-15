@@ -24,6 +24,8 @@ export const syncLimitOrders = async (req: Request, res: Response, next: NextFun
         error: 'Missing required fields: walletAddress, orders (array)'
       })
     }
+    console.log(data.orders[0]);
+    
 
     // Normalize wallet address
     const normalizedWallet = data.walletAddress.toLowerCase()
