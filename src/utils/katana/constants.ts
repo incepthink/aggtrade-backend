@@ -31,6 +31,8 @@ export const FULL_SWAP_DATA_TTL = 365 * 24 * 60 * 60; // 365 days (1 year)
 export const UPDATE_LOCK_PREFIX = "update_lock_katana_";
 export const UPDATE_LOCK_TTL = 60 * 60; // 1 hour lock
 export const UPDATE_LOCK_TIMEOUT = 60 * 60 * 1000; // 1 hour (ms)
+export const CANDLE_GAP_FIX_LOCK_PREFIX = "candle_gap_fix_lock_";
+export const CANDLE_GAP_FIX_LOCK_TTL = 3600; // 1 hour (in seconds)
 
 /**
  * Data Fetching Limits

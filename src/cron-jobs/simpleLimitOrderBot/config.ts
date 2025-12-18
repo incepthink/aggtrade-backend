@@ -1,24 +1,156 @@
 /**
  * Configuration for Simple Limit Order Bot
+ *
+ * HIGH VOLUME STRATEGY:
+ * - Optimized for $100 wallets to generate $1,000 daily volume (10x turnover)
+ * - 5-minute cycles for rapid order placement and fills
+ * - Pair-specific configs for maximum efficiency
  */
 
 export const BOT_CONFIG = {
   RPC_URL: 'https://rpc.katana.network',
-  CRON_INTERVAL_HOURS: 4,
+  CRON_INTERVAL_MINUTES: 5,  // Changed from 4 hours to 5 minutes (288 cycles/day)
+  CRON_INTERVAL_HOURS: 4,    // Keep for backward compatibility
   CHAIN_ID: 747474
 }
 
-export const GRID_CONFIG = {
-  BUY_OFFSETS: [-1, -1.5, -2, -2.5, -3],
-  SELL_OFFSETS: [1, 1.5, 2, 2.5, 3],
-  MIN_ORDER_SIZE_USD: 6,
-  EXPIRY_HOURS: 168
+/**
+ * Rate limiting configuration (from equityTrend.ts pattern)
+ */
+export const RATE_LIMIT_CONFIG = {
+  WALLET_BATCH_SIZE: 3,  // Process 3 wallets concurrently
+  BATCH_DELAY_MS: 2000   // 2-second delay between batches
 }
 
+/**
+ * PAIR-SPECIFIC GRID CONFIGURATIONS
+ * Optimized for different liquidity levels and volatility
+ */
+export const PAIR_GRID_CONFIGS: Record<string, {
+  BUY_OFFSETS: number[]
+  SELL_OFFSETS: number[]
+  MIN_ORDER_SIZE_USD: number
+  EXPIRY_HOURS: number
+  PROFIT_MARGIN_PERCENT: number
+  DESCRIPTION: string
+}> = {
+  // USDC/WETH - Highest liquidity, tightest spreads
+  'USDC/WETH': {
+    BUY_OFFSETS: [-0.04, -0.06, -0.08, -0.10, -0.12],     // 5 buy orders
+    SELL_OFFSETS: [0.04, 0.06, 0.08, 0.10, 0.12],         // 5 sell orders
+    MIN_ORDER_SIZE_USD: 8,  // $100 / 5 pairs / 2 orders per pair = ~$10 per order
+    EXPIRY_HOURS: 12,       // Shorter expiry for faster capital recycling
+    PROFIT_MARGIN_PERCENT: 0.15,  // Tight margin for fast counter fills
+    DESCRIPTION: 'Ultra-aggressive for highest liquidity pair'
+  },
+
+  // USDC/WBTC - High liquidity, tight spreads
+  'USDC/WBTC': {
+    BUY_OFFSETS: [-0.04, -0.06, -0.08, -0.10, -0.12],
+    SELL_OFFSETS: [0.04, 0.06, 0.08, 0.10, 0.12],
+    MIN_ORDER_SIZE_USD: 8,
+    EXPIRY_HOURS: 12,
+    PROFIT_MARGIN_PERCENT: 0.15,
+    DESCRIPTION: 'Ultra-aggressive for high liquidity BTC pair'
+  },
+
+  // WBTC/WETH - Lower liquidity, slightly wider spreads
+  'WBTC/WETH': {
+    BUY_OFFSETS: [-0.05, -0.10, -0.15, -0.20, -0.25],
+    SELL_OFFSETS: [0.05, 0.10, 0.15, 0.20, 0.25],
+    MIN_ORDER_SIZE_USD: 8,
+    EXPIRY_HOURS: 12,
+    PROFIT_MARGIN_PERCENT: 0.25,  // Wider margin for safety
+    DESCRIPTION: 'Aggressive for cross-asset pair'
+  },
+
+  // Reverse pairs (support both notations)
+  'WETH/USDC': {
+    BUY_OFFSETS: [-0.04, -0.06, -0.08, -0.10, -0.12],
+    SELL_OFFSETS: [0.04, 0.06, 0.08, 0.10, 0.12],
+    MIN_ORDER_SIZE_USD: 8,
+    EXPIRY_HOURS: 12,
+    PROFIT_MARGIN_PERCENT: 0.15,
+    DESCRIPTION: 'Same as USDC/WETH (reverse notation)'
+  },
+
+  'WBTC/USDC': {
+    BUY_OFFSETS: [-0.04, -0.06, -0.08, -0.10, -0.12],
+    SELL_OFFSETS: [0.04, 0.06, 0.08, 0.10, 0.12],
+    MIN_ORDER_SIZE_USD: 8,
+    EXPIRY_HOURS: 12,
+    PROFIT_MARGIN_PERCENT: 0.15,
+    DESCRIPTION: 'Same as USDC/WBTC (reverse notation)'
+  },
+
+  'WETH/WBTC': {
+    BUY_OFFSETS: [-0.05, -0.10, -0.15, -0.20, -0.25],
+    SELL_OFFSETS: [0.05, 0.10, 0.15, 0.20, 0.25],
+    MIN_ORDER_SIZE_USD: 8,
+    EXPIRY_HOURS: 12,
+    PROFIT_MARGIN_PERCENT: 0.25,
+    DESCRIPTION: 'Same as WBTC/WETH (reverse notation)'
+  }
+}
+
+/**
+ * DEFAULT GRID CONFIG (fallback for other pairs)
+ * More conservative settings for lower liquidity pairs
+ */
+export const GRID_CONFIG = {
+  BUY_OFFSETS: [-0.1, -0.15, -0.2, -0.25, -0.3],
+  SELL_OFFSETS: [0.1, 0.15, 0.2, 0.25, 0.3],
+  MIN_ORDER_SIZE_USD: 8,
+  EXPIRY_HOURS: 12
+}
+
+/**
+ * COUNTER ORDER CONFIG
+ * Used when grid orders fill and counter orders are placed
+ */
 export const COUNTER_ORDER_CONFIG = {
-  PROFIT_MARGIN_PERCENT: 1,
-  MIN_ORDER_SIZE_USD: 6,
-  EXPIRY_HOURS: 168
+  PROFIT_MARGIN_PERCENT: 0.2,  // Default, overridden by pair-specific config
+  MIN_ORDER_SIZE_USD: 8,
+  EXPIRY_HOURS: 12
+}
+
+/**
+ * Helper function to get config for a specific trading pair
+ * Normalizes pair format and returns appropriate configuration
+ */
+export function getGridConfigForPair(tradingPool: string): {
+  BUY_OFFSETS: number[]
+  SELL_OFFSETS: number[]
+  MIN_ORDER_SIZE_USD: number
+  EXPIRY_HOURS: number
+  PROFIT_MARGIN_PERCENT: number
+} {
+  // Normalize trading pool format (remove spaces, uppercase)
+  const normalizedPool = tradingPool.replace(/\s+/g, '').toUpperCase()
+
+  // Check if we have a specific config for this pair
+  if (PAIR_GRID_CONFIGS[normalizedPool]) {
+    console.log(`[Config] Using specific config for ${normalizedPool}`)
+    return PAIR_GRID_CONFIGS[normalizedPool]
+  }
+
+  // Try reverse order (e.g., WETH/USDC -> USDC/WETH)
+  const [token1, token2] = normalizedPool.split('/')
+  if (token1 && token2) {
+    const reversedPool = `${token2}/${token1}`
+
+    if (PAIR_GRID_CONFIGS[reversedPool]) {
+      console.log(`[Config] Using reversed config for ${normalizedPool} -> ${reversedPool}`)
+      return PAIR_GRID_CONFIGS[reversedPool]
+    }
+  }
+
+  // Fallback to default config
+  console.warn(`[Config] No specific config for ${tradingPool}, using default`)
+  return {
+    ...GRID_CONFIG,
+    PROFIT_MARGIN_PERCENT: COUNTER_ORDER_CONFIG.PROFIT_MARGIN_PERCENT
+  }
 }
 
 export const TEST_MODE_CONFIG = {

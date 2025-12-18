@@ -12,7 +12,7 @@ import { ethers } from 'ethers'
 import { KatanaLogger } from '../../utils/logger'
 import { placeInitialOrders } from './placeInitialOrders'
 import { checkCounterOrders } from './checkCounterOrders'
-import { BOT_CONFIG, TEST_MODE_CONFIG } from './config'
+import { BOT_CONFIG, TEST_MODE_CONFIG, RATE_LIMIT_CONFIG } from './config'
 import { WalletService } from './services/WalletService'
 import { BalanceService } from './services/BalanceService'
 import { TOKEN_COLUMN_MAPPING } from '../utils/botBalanceUpdater'
@@ -110,37 +110,77 @@ export async function runSimpleLimitOrderBot(): Promise<void> {
 
     KatanaLogger.info(PREFIX, `Found ${botWallets.length} bot wallets`)
 
-    // Process each wallet sequentially
-    for (const botWalletRecord of botWallets) {
-      // Load wallet private key and create signer
-      const wallet = WalletService.loadWalletWithSigner(botWalletRecord.wallet_index, provider)
+    // Process wallets in batches with rate limiting (from equityTrend.ts pattern)
+    const batchSize = RATE_LIMIT_CONFIG.WALLET_BATCH_SIZE
+    const delayMs = RATE_LIMIT_CONFIG.BATCH_DELAY_MS
+    const totalBatches = Math.ceil(botWallets.length / batchSize)
+    const results: any[] = []
 
-      if (!wallet) {
-        KatanaLogger.error(
+    KatanaLogger.info(PREFIX, `Processing ${botWallets.length} wallets in batches of ${batchSize}`)
+
+    for (let i = 0; i < botWallets.length; i += batchSize) {
+      const batch = botWallets.slice(i, i + batchSize)
+      const batchNum = Math.floor(i / batchSize) + 1
+
+      // Log progress every 5 batches or on the last batch
+      if (batchNum % 5 === 1 || batchNum === totalBatches) {
+        KatanaLogger.info(
           PREFIX,
-          `Skipping wallet ${botWalletRecord.wallet_index} - private key not found`
+          `Processing batch ${batchNum}/${totalBatches} (wallets ${i + 1}-${Math.min(i + batchSize, botWallets.length)})`
         )
-        continue
       }
 
-      // Verify wallet address matches database
-      if (wallet.address.toLowerCase() !== botWalletRecord.wallet_address.toLowerCase()) {
-        KatanaLogger.error(
-          PREFIX,
-          `Wallet address mismatch! DB: ${botWalletRecord.wallet_address}, Env: ${wallet.address}`
-        )
-        continue
+      // Process batch in parallel
+      const batchResults = await Promise.all(
+        batch.map(async (botWalletRecord) => {
+          try {
+            // Load wallet private key and create signer
+            const wallet = WalletService.loadWalletWithSigner(botWalletRecord.wallet_index, provider)
+
+            if (!wallet) {
+              KatanaLogger.error(
+                PREFIX,
+                `Skipping wallet ${botWalletRecord.wallet_index} - private key not found`
+              )
+              return { success: false, walletIndex: botWalletRecord.wallet_index, error: 'No private key' }
+            }
+
+            // Verify wallet address matches database
+            if (wallet.address.toLowerCase() !== botWalletRecord.wallet_address.toLowerCase()) {
+              KatanaLogger.error(
+                PREFIX,
+                `Wallet address mismatch! DB: ${botWalletRecord.wallet_address}, Env: ${wallet.address}`
+              )
+              return { success: false, walletIndex: botWalletRecord.wallet_index, error: 'Address mismatch' }
+            }
+
+            // Add trading pool info from database
+            wallet.tradingPool = botWalletRecord.trading_pool
+
+            // Process this wallet
+            await processWallet(wallet, botWalletRecord)
+
+            return { success: true, walletIndex: wallet.index }
+          } catch (error: any) {
+            KatanaLogger.error(PREFIX, `Batch processing error for wallet ${botWalletRecord.wallet_index}`, error)
+            return { success: false, walletIndex: botWalletRecord.wallet_index, error: error?.message }
+          }
+        })
+      )
+
+      results.push(...batchResults)
+
+      // Add delay between batches (except last batch) to prevent RPC rate limiting
+      if (i + batchSize < botWallets.length) {
+        await new Promise(resolve => setTimeout(resolve, delayMs))
       }
-
-      // Add trading pool info from database
-      wallet.tradingPool = botWalletRecord.trading_pool
-
-      // Process this wallet
-      await processWallet(wallet, botWalletRecord)
-
-      // Small delay between wallets to avoid rate limiting
-      await new Promise(resolve => setTimeout(resolve, 2000))
     }
+
+    // Calculate statistics
+    const successful = results.filter((r) => r.success).length
+    const failed = results.filter((r) => !r.success).length
+
+    KatanaLogger.info(PREFIX, `Batch processing complete: ${successful} successful, ${failed} failed`)
 
     // Summary
     const endTime = Date.now()
@@ -153,7 +193,10 @@ export async function runSimpleLimitOrderBot(): Promise<void> {
     KatanaLogger.info(PREFIX, `Completed at: ${new Date().toISOString()}`)
     KatanaLogger.info(PREFIX, `Duration: ${durationSeconds} seconds`)
     KatanaLogger.info(PREFIX, `Processed ${botWallets.length} wallets`)
-    KatanaLogger.info(PREFIX, `Next run in ${BOT_CONFIG.CRON_INTERVAL_HOURS} hours\n\n`)
+    const intervalStr = TEST_MODE_CONFIG.enabled
+      ? `${TEST_MODE_CONFIG.intervalSeconds} seconds`
+      : `${BOT_CONFIG.CRON_INTERVAL_MINUTES} minutes`
+    KatanaLogger.info(PREFIX, `Next run in ${intervalStr}\n\n`)
 
   } catch (error) {
     KatanaLogger.error(PREFIX, 'Bot cycle failed', error)
@@ -166,7 +209,7 @@ export async function runSimpleLimitOrderBot(): Promise<void> {
 }
 
 /**
- * Start the cron job with 4-hour interval (or 10 seconds in test mode)
+ * Start the cron job with 5-minute interval (or 10 seconds in test mode)
  * Uses setTimeout instead of setInterval to ensure runs don't overlap
  */
 export function startSimpleLimitOrderBotCron(): void {
@@ -176,12 +219,13 @@ export function startSimpleLimitOrderBotCron(): void {
     KatanaLogger.info(PREFIX, 'Orders will be SIMULATED, not placed on blockchain')
   } else {
     KatanaLogger.info(PREFIX, 'Starting Simple Limit Order Bot cron job')
-    KatanaLogger.info(PREFIX, `Interval: Every ${BOT_CONFIG.CRON_INTERVAL_HOURS} hours`)
+    KatanaLogger.info(PREFIX, `Interval: Every ${BOT_CONFIG.CRON_INTERVAL_MINUTES} minutes`)
+    KatanaLogger.info(PREFIX, `Rate limiting: ${RATE_LIMIT_CONFIG.WALLET_BATCH_SIZE} wallets per batch, ${RATE_LIMIT_CONFIG.BATCH_DELAY_MS}ms delay`)
   }
 
   const intervalMs = TEST_MODE_CONFIG.enabled
     ? TEST_MODE_CONFIG.intervalSeconds * 1000
-    : BOT_CONFIG.CRON_INTERVAL_HOURS * 60 * 60 * 1000
+    : BOT_CONFIG.CRON_INTERVAL_MINUTES * 60 * 1000  // Use minutes instead of hours
 
   // Recursive function to schedule next run after current one completes
   const scheduleNextRun = async () => {

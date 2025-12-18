@@ -26,12 +26,7 @@ interface CounterOrderConfig {
 }
 
 export class CounterOrderService {
-  private static config: CounterOrderConfig = {
-    profitMarginPercent: 1,
-    minOrderSizeUsd: 6,
-    expiryHours: 168,
-    chainId: 747474
-  }
+  private static readonly CHAIN_ID = 747474
 
   /**
    * Retry helper for database operations
@@ -95,7 +90,7 @@ export class CounterOrderService {
       )
 
       // Get or create user with retry (now has built-in retry in the model)
-      const { user } = await User.findOrCreateUser(walletAddress.toLowerCase(), this.config.chainId)
+      const { user } = await User.findOrCreateUser(walletAddress.toLowerCase(), this.CHAIN_ID)
 
       // Get tokens
       const fromToken = getToken(dbOrder.from_token)
@@ -139,7 +134,7 @@ export class CounterOrderService {
             wallet_address: walletAddress.toLowerCase(),
             swap_type: 'LIMIT_ORDER',
             tx_hash: uniqueTxHash,
-            chain_id: this.config.chainId,
+            chain_id: this.CHAIN_ID,
             block_number: null,
             block_timestamp: new Date(),
             token_from_address: fromToken.address,
@@ -204,7 +199,12 @@ export class CounterOrderService {
   static async placeCounterOrder(
     update: OrderStatusUpdate,
     signer: ethers.Wallet,
-    walletIndex: number
+    walletIndex: number,
+    pairConfig: {
+      profitMarginPercent: number
+      minOrderSizeUsd: number
+      expiryHours: number
+    }
   ): Promise<void> {
     const { dbOrder, blockchainOrder } = update
 
@@ -265,19 +265,19 @@ export class CounterOrderService {
 
       // Calculate counter-order price
       const counterPrice = isParentBuyOrder
-        ? executionPriceUSD * (1 + this.config.profitMarginPercent / 100)
-        : executionPriceUSD * (1 - this.config.profitMarginPercent / 100)
+        ? executionPriceUSD * (1 + pairConfig.profitMarginPercent / 100)
+        : executionPriceUSD * (1 - pairConfig.profitMarginPercent / 100)
 
       KatanaLogger.info(
         PREFIX,
-        `Counter price: $${counterPrice.toFixed(6)} (${isParentBuyOrder ? '+' : '-'}${this.config.profitMarginPercent}%)`
+        `Counter price: $${counterPrice.toFixed(6)} (${isParentBuyOrder ? '+' : '-'}${pairConfig.profitMarginPercent}%)`
       )
 
       // Validate minimum order value
       const counterAmount = toAmountHuman
       const counterValueUSD = parseFloat(counterAmount) * toTokenPrice
 
-      if (counterValueUSD < this.config.minOrderSizeUsd) {
+      if (counterValueUSD < pairConfig.minOrderSizeUsd) {
         KatanaLogger.warn(
           PREFIX,
           `[Wallet ${walletIndex}] Counter value $${counterValueUSD.toFixed(2)} below minimum, skipping`
@@ -316,7 +316,7 @@ export class CounterOrderService {
         counterToToken,
         counterAmount,
         limitPrice,
-        this.config.expiryHours
+        pairConfig.expiryHours
       )
 
       // Execute counter-order

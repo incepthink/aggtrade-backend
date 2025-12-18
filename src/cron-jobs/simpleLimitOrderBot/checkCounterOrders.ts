@@ -10,6 +10,7 @@ import { CounterOrderService } from './services/CounterOrderService'
 import BotOrdersSimple from '../../models/BotOrdersSimple'
 import { getToken } from '../gridBot/tokenPairs.config'
 import { toWei } from '../utils/botHelpers'
+import { getGridConfigForPair } from './config'
 
 const PREFIX = '[CheckCounterOrders]'
 
@@ -17,7 +18,8 @@ const PREFIX = '[CheckCounterOrders]'
  * Verify all filled orders have counter orders and place missing ones
  */
 async function verifyAndPlaceMissingCounterOrders(
-  wallet: WalletWithSigner
+  wallet: WalletWithSigner,
+  pairConfig: ReturnType<typeof getGridConfigForPair>
 ): Promise<void> {
   KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Verifying all filled orders have counter orders...`)
 
@@ -98,7 +100,12 @@ async function verifyAndPlaceMissingCounterOrders(
           await CounterOrderService.placeCounterOrder(
             mockUpdate,
             wallet.signer,
-            wallet.index
+            wallet.index,
+            {
+              profitMarginPercent: pairConfig.PROFIT_MARGIN_PERCENT,
+              minOrderSizeUsd: pairConfig.MIN_ORDER_SIZE_USD,
+              expiryHours: pairConfig.EXPIRY_HOURS
+            }
           )
 
           placedCount++
@@ -140,6 +147,9 @@ export async function checkCounterOrders(
   KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Checking orders for counter-order placement...`)
 
   try {
+    // Get pair-specific configuration
+    const pairConfig = getGridConfigForPair(wallet.tradingPool)
+
     // Poll blockchain for order status updates
     const updates = await OrderStatusService.pollOrderStatus(wallet.address, wallet.index)
 
@@ -171,7 +181,12 @@ export async function checkCounterOrders(
             await CounterOrderService.placeCounterOrder(
               update,
               wallet.signer,
-              wallet.index
+              wallet.index,
+              {
+                profitMarginPercent: pairConfig.PROFIT_MARGIN_PERCENT,
+                minOrderSizeUsd: pairConfig.MIN_ORDER_SIZE_USD,
+                expiryHours: pairConfig.EXPIRY_HOURS
+              }
             )
           }
         } catch (error) {
@@ -188,7 +203,7 @@ export async function checkCounterOrders(
     }
 
     // After processing status changes, verify all filled orders have counter orders
-    await verifyAndPlaceMissingCounterOrders(wallet)
+    await verifyAndPlaceMissingCounterOrders(wallet, pairConfig)
 
     KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Counter order check complete`)
   } catch (error) {

@@ -73,6 +73,7 @@ import { getEquityTrendForUser, storeUserForEquityTracking } from "./controllers
 
 import { triggerMigrationManually } from "./cron-jobs/migrateKatanaSwapsToMySQL";
 import { fixTokenGaps } from "./controllers/katanaGapFixRoutes";
+import { fixCandleGaps } from "./controllers/katanaCandleGapFixController";
 import { deleteTokenData } from "./controllers/deleteTokenDataController";
 
 const router = Router();
@@ -99,7 +100,10 @@ router.get("/admin/trigger-migration", async (req, res) => {
 router.delete('/admin/delete-token/:tokenAddress', deleteTokenData);
 
 // Admin route to fill gaps in katana swap data
-router.get("/admin/fill-katana-gaps/:tokenAddress", fixTokenGaps)
+router.get("/admin/fill-katana-gaps/:tokenAddress", fixTokenGaps);
+
+// Admin route to fix gaps in katana candle data
+router.get("/admin/fix-candle-gaps/:tokenAddress", fixCandleGaps);
 
 // POST /api/address → Create mapping if it doesn't exist
 router.post("/address", createMapping);

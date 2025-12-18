@@ -6,7 +6,7 @@
 import { getToken } from '../gridBot/tokenPairs.config'
 import { getCurrentTokenPrice } from '../gridBot/priceManager'
 import { KatanaLogger } from '../../utils/logger'
-import { GRID_CONFIG } from './config'
+import { getGridConfigForPair } from './config'
 import { WalletService, type WalletWithSigner } from './services/WalletService'
 import { BalanceService } from './services/BalanceService'
 import { OrderConstructionService } from './services/OrderConstructionService'
@@ -66,10 +66,11 @@ async function placeOrderPair(
   targetToken: any,
   pairIndex: number,
   currentPrice: number,
-  baseTokenPrice: number
+  baseTokenPrice: number,
+  pairConfig: ReturnType<typeof getGridConfigForPair>
 ): Promise<boolean> {
-  const buyOffset = GRID_CONFIG.BUY_OFFSETS[pairIndex]
-  const sellOffset = GRID_CONFIG.SELL_OFFSETS[pairIndex]
+  const buyOffset = pairConfig.BUY_OFFSETS[pairIndex]
+  const sellOffset = pairConfig.SELL_OFFSETS[pairIndex]
 
   KatanaLogger.info(PREFIX, `\nPair ${pairIndex + 1}/5: BUY ${buyOffset}%, SELL ${sellOffset}%`)
 
@@ -92,7 +93,7 @@ async function placeOrderPair(
       sellOffset,
       currentPrice,
       baseTokenPrice,
-      GRID_CONFIG.EXPIRY_HOURS
+      pairConfig.EXPIRY_HOURS
     )
 
     KatanaLogger.info(PREFIX, 'Both orders constructed successfully')
@@ -138,7 +139,11 @@ export async function placeInitialOrders(
     const baseToken = getToken(baseTokenSymbol)
     const targetToken = getToken(targetTokenSymbol)
 
+    // Get pair-specific configuration
+    const pairConfig = getGridConfigForPair(botWalletRecord.trading_pool)
+
     KatanaLogger.info(PREFIX, `Trading pool: ${targetToken.symbol}/${baseToken.symbol}`)
+    KatanaLogger.info(PREFIX, `Using config: BUY ${pairConfig.BUY_OFFSETS[0]}% to ${pairConfig.BUY_OFFSETS[pairConfig.BUY_OFFSETS.length - 1]}%, SELL ${pairConfig.SELL_OFFSETS[0]}% to ${pairConfig.SELL_OFFSETS[pairConfig.SELL_OFFSETS.length - 1]}%`)
 
     // Get current prices
     const currentPrice = await getCurrentTokenPrice(targetToken.symbol)
@@ -188,7 +193,8 @@ export async function placeInitialOrders(
         targetToken,
         i,
         currentPrice,
-        baseTokenPrice
+        baseTokenPrice,
+        pairConfig
       )
 
       if (!success) {
