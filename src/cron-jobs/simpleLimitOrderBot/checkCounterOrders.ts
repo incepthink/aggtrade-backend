@@ -61,13 +61,17 @@ async function verifyAndPlaceMissingCounterOrders(
         if (!existingCounterOrder) {
           missingCount++
 
-          KatanaLogger.info(
+          KatanaLogger.warn(
             PREFIX,
-            `[Wallet ${wallet.index}] Missing counter order for ${filledOrder.order_type} order ${filledOrder.id}`
+            `[Wallet ${wallet.index}] ⚠️  Missing counter order for ${filledOrder.order_type} order ${filledOrder.id}`
           )
           KatanaLogger.info(
             PREFIX,
-            `[Wallet ${wallet.index}] Filled: ${filledOrder.from_amount} ${filledOrder.from_token} → ${filledOrder.to_amount} ${filledOrder.to_token}`
+            `[Wallet ${wallet.index}]     Filled: ${filledOrder.from_amount} ${filledOrder.from_token} → ${filledOrder.to_amount} ${filledOrder.to_token}`
+          )
+          KatanaLogger.info(
+            PREFIX,
+            `[Wallet ${wallet.index}]     Expected: ${expectedCounterType} order`
           )
 
           // Get token configs to convert amounts to Wei
@@ -124,12 +128,19 @@ async function verifyAndPlaceMissingCounterOrders(
     }
 
     if (missingCount === 0) {
-      KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] ✅ All filled orders have counter orders`)
+      KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] ✅ All ${filledOrders.length} filled orders have counter orders`)
     } else {
-      KatanaLogger.info(
-        PREFIX,
-        `[Wallet ${wallet.index}] 📝 Placed ${placedCount}/${missingCount} missing counter orders`
-      )
+      if (placedCount === missingCount) {
+        KatanaLogger.info(
+          PREFIX,
+          `[Wallet ${wallet.index}] ✅ Placed all ${placedCount} missing counter orders`
+        )
+      } else {
+        KatanaLogger.error(
+          PREFIX,
+          `[Wallet ${wallet.index}] ⚠️  Only placed ${placedCount}/${missingCount} missing counter orders!`
+        )
+      }
     }
   } catch (error) {
     KatanaLogger.error(PREFIX, `[Wallet ${wallet.index}] Failed to verify counter orders`, error)
@@ -151,11 +162,13 @@ export async function checkCounterOrders(
     const pairConfig = getGridConfigForPair(wallet.tradingPool)
 
     // Poll blockchain for order status updates
+    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Polling blockchain for order status updates...`)
     const updates = await OrderStatusService.pollOrderStatus(wallet.address, wallet.index)
 
     if (updates.length === 0) {
-      KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] No status changes detected`)
+      KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] ℹ️  No status changes detected (all orders unchanged)`)
     } else {
+      KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] 📊 Found ${updates.length} order status change(s)`)
       // Process each status update
       for (const update of updates) {
         try {
@@ -199,13 +212,14 @@ export async function checkCounterOrders(
         }
       }
 
-      KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Status updates processed`)
+      KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] ✅ Status updates processed`)
     }
 
     // After processing status changes, verify all filled orders have counter orders
+    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Starting counter order verification...`)
     await verifyAndPlaceMissingCounterOrders(wallet, pairConfig)
 
-    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Counter order check complete`)
+    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] ✅ Counter order check complete`)
   } catch (error) {
     KatanaLogger.error(PREFIX, `[Wallet ${wallet.index}] checkCounterOrders failed`, error)
     throw error

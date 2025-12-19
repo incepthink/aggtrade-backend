@@ -15,11 +15,12 @@ export const BOT_CONFIG = {
 }
 
 /**
- * Rate limiting configuration (from equityTrend.ts pattern)
+ * Rate limiting configuration
+ * NOTE: Wallets are processed sequentially (one at a time) for clean logs and no race conditions
  */
 export const RATE_LIMIT_CONFIG = {
-  WALLET_BATCH_SIZE: 3,  // Process 3 wallets concurrently
-  BATCH_DELAY_MS: 2000   // 2-second delay between batches
+  WALLET_BATCH_SIZE: 3,  // DEPRECATED: No longer used (kept for backward compatibility)
+  BATCH_DELAY_MS: 2000   // Delay between sequential wallet processing (in milliseconds)
 }
 
 /**

@@ -75,11 +75,7 @@ async function placeOrderPair(
   KatanaLogger.info(PREFIX, `\nPair ${pairIndex + 1}/5: BUY ${buyOffset}%, SELL ${sellOffset}%`)
 
   try {
-    // Sync balances
-    KatanaLogger.info(PREFIX, 'Syncing balances...')
-    await BalanceService.syncBalances(wallet.signer.provider!, wallet.address)
-
-    // Construct order pair
+    // Construct order pair (balance already synced at wallet level)
     KatanaLogger.info(PREFIX, 'Constructing order pair...')
     const buyPrice = currentPrice * (1 + buyOffset / 100)
     const sellPrice = currentPrice * (1 + sellOffset / 100)
@@ -101,19 +97,17 @@ async function placeOrderPair(
     // Execute buy order
     KatanaLogger.info(PREFIX, 'Executing BUY order...')
     await OrderExecutionService.executeOrder(wallet.signer, buyOrder, wallet.index)
-    KatanaLogger.info(PREFIX, 'BUY order placed')
+    KatanaLogger.info(PREFIX, '✅ BUY order placed')
 
-    await BalanceService.syncBalances(wallet.signer.provider!, wallet.address)
+    // Small delay between buy and sell orders
     await new Promise(resolve => setTimeout(resolve, 2000))
 
     // Execute sell order
     KatanaLogger.info(PREFIX, 'Executing SELL order...')
     await OrderExecutionService.executeOrder(wallet.signer, sellOrder, wallet.index)
-    KatanaLogger.info(PREFIX, 'SELL order placed')
+    KatanaLogger.info(PREFIX, '✅ SELL order placed')
 
-    await BalanceService.syncBalances(wallet.signer.provider!, wallet.address)
-
-    KatanaLogger.info(PREFIX, `Pair ${pairIndex + 1}/5 completed successfully`)
+    KatanaLogger.info(PREFIX, `✅ Pair ${pairIndex + 1}/5 completed successfully`)
     return true
 
   } catch (error) {
@@ -161,6 +155,7 @@ export async function placeInitialOrders(
     let successfulPairs = 0
     let failedPairs = 0
     let skippedPairs: number[] = []
+    const skipReasons: string[] = []
 
     for (let i = startFrom; i < totalPairs; i++) {
       KatanaLogger.info(PREFIX, `\n${'='.repeat(60)}`)
@@ -170,8 +165,10 @@ export async function placeInitialOrders(
       // Safety check
       const isSafe = await verifyNoBlockchainDuplicates(wallet, i)
       if (!isSafe) {
-        KatanaLogger.warn(PREFIX, `Safety check failed for pair ${i + 1}! Skipping this pair...`)
+        const reason = `Safety check failed - duplicate orders detected`
+        KatanaLogger.warn(PREFIX, `⚠️  Pair ${i + 1}/5 SKIPPED: ${reason}`)
         skippedPairs.push(i + 1)
+        skipReasons.push(`Pair ${i + 1}: ${reason}`)
         failedPairs++
         continue // Skip this pair and continue with the rest
       }
@@ -220,7 +217,21 @@ export async function placeInitialOrders(
     KatanaLogger.info(PREFIX, `  ✅ Successful pairs: ${successfulPairs}`)
     KatanaLogger.info(PREFIX, `  ❌ Failed pairs: ${failedPairs}`)
     if (skippedPairs.length > 0) {
-      KatanaLogger.info(PREFIX, `  ⏭️  Skipped pairs (safety check failed): ${skippedPairs.join(', ')}`)
+      KatanaLogger.warn(PREFIX, `  ⏭️  Skipped pairs: ${skippedPairs.join(', ')}`)
+      for (const skipReason of skipReasons) {
+        KatanaLogger.warn(PREFIX, `     - ${skipReason}`)
+      }
+    }
+
+    // Error if all pairs were skipped or failed
+    if (successfulPairs === 0 && (failedPairs > 0 || skippedPairs.length > 0)) {
+      KatanaLogger.error(PREFIX, `🚨 ALL PAIRS FAILED OR SKIPPED! No orders placed for wallet ${wallet.index}`)
+    }
+
+    // Sync balances after all order placements to get accurate final state
+    if (successfulPairs > 0) {
+      KatanaLogger.info(PREFIX, 'Syncing balances after order placements...')
+      await BalanceService.syncBalances(wallet.signer.provider!, wallet.address)
     }
 
     // Check completion
