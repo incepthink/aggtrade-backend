@@ -31,7 +31,7 @@ export const disrtibuteXPJob = async (
 
     // Step 1: Update limit order fees from TWAP SDK
     console.log("\n=== UPDATING LIMIT ORDER FEES FROM SDK ===")
-    const feeUpdateResult = await updateLimitOrderFeesFromSDK(weekStart, weekEnd)
+    const feeUpdateResult = await updateLimitOrderFeesFromSDK(weekStart, weekEnd, testWalletAddress)
     console.log("Fee update summary:")
     console.log("  Total orders found: ", feeUpdateResult.totalOrders)
     console.log("  Wallets processed: ", feeUpdateResult.walletsProcessed)

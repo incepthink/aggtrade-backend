@@ -29,11 +29,13 @@ export interface FeeUpdateResult {
  *
  * @param weekStart - Start of the week to process
  * @param weekEnd - End of the week to process
+ * @param testWalletAddress - Optional: only process this specific wallet (for testing)
  * @returns Summary of updates performed
  */
 export const updateLimitOrderFeesFromSDK = async (
   weekStart: Date,
-  weekEnd: Date
+  weekEnd: Date,
+  testWalletAddress?: string
 ): Promise<FeeUpdateResult> => {
   const result: FeeUpdateResult = {
     totalOrders: 0,
@@ -45,20 +47,28 @@ export const updateLimitOrderFeesFromSDK = async (
 
   KatanaLogger.info(LOG_PREFIX, "Starting limit order fee update", {
     weekStart: weekStart.toISOString(),
-    weekEnd: weekEnd.toISOString()
+    weekEnd: weekEnd.toISOString(),
+    testWalletAddress: testWalletAddress || 'all wallets'
   })
 
   try {
     // Step 1: Query all limit orders for the week
-    const limitOrders = await SushiswapActivity.findAll({
-      where: {
-        swap_type: 'LIMIT_ORDER',
-        status: 'success',
-        timestamp: {
-          [Op.gte]: weekStart,
-          [Op.lt]: weekEnd
-        }
+    const whereClause: any = {
+      swap_type: 'LIMIT_ORDER',
+      status: 'success',
+      timestamp: {
+        [Op.gte]: weekStart,
+        [Op.lt]: weekEnd
       }
+    }
+
+    // Filter by wallet if testing
+    if (testWalletAddress) {
+      whereClause.wallet_address = testWalletAddress.toLowerCase()
+    }
+
+    const limitOrders = await SushiswapActivity.findAll({
+      where: whereClause
     })
 
     result.totalOrders = limitOrders.length

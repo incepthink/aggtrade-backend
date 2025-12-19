@@ -418,7 +418,7 @@ export const getEligibleVolumeAndFees = (swaps: SushiswapActivity[]): {
   // How: Filter on both usd_volume and price_impact fields
 
   const minFillSize = 8; // $10 USD minimum
-  const minImpact = 0.0001; // 1 basis point (1bp = 0.01% = 0.0001)
+  // const minImpact = 0.0001; // 1 basis point (1bp = 0.01% = 0.0001) - COMMENTED OUT TEMPORARILY
 
   const filteredBySize = swaps.filter(swap => Number(swap.usd_volume) >= minFillSize);
   const filteredOutBySize = swaps.length - filteredBySize.length;
@@ -439,27 +439,31 @@ export const getEligibleVolumeAndFees = (swaps: SushiswapActivity[]): {
     return { perPairData: [], totalEligibleVolume: 0, totalFees: 0 };
   }
 
+  // COMMENTED OUT TEMPORARILY - minImpact filter
   // Now apply minimum impact filter
-  const filteredBySizeAndImpact = filteredBySize.filter(swap => Number(swap.price_impact) >= minImpact);
-  const filteredOutByImpact = filteredBySize.length - filteredBySizeAndImpact.length;
-  const volumeFilteredOutByImpact = filteredBySize.reduce((sum, s) => sum + Number(s.usd_volume), 0) -
-                                     filteredBySizeAndImpact.reduce((sum, s) => sum + Number(s.usd_volume), 0);
+  // const filteredBySizeAndImpact = filteredBySize.filter(swap => Number(swap.price_impact) >= minImpact);
+  // const filteredOutByImpact = filteredBySize.length - filteredBySizeAndImpact.length;
+  // const volumeFilteredOutByImpact = filteredBySize.reduce((sum, s) => sum + Number(s.usd_volume), 0) -
+  //                                    filteredBySizeAndImpact.reduce((sum, s) => sum + Number(s.usd_volume), 0);
 
-  KatanaLogger.info(LOG_PREFIX, "STEP 1b: Minimum impact filter complete", {
-    minImpactBp: '1bp (0.01%)',
-    minImpactDecimal: minImpact,
-    swapsBefore: filteredBySize.length,
-    swapsAfter: filteredBySizeAndImpact.length,
-    swapsRemoved: filteredOutByImpact,
-    volumeRemoved: volumeFilteredOutByImpact,
-    volumeRemaining: filteredBySizeAndImpact.reduce((sum, s) => sum + Number(s.usd_volume), 0)
-  });
+  // KatanaLogger.info(LOG_PREFIX, "STEP 1b: Minimum impact filter complete", {
+  //   minImpactBp: '1bp (0.01%)',
+  //   minImpactDecimal: minImpact,
+  //   swapsBefore: filteredBySize.length,
+  //   swapsAfter: filteredBySizeAndImpact.length,
+  //   swapsRemoved: filteredOutByImpact,
+  //   volumeRemoved: volumeFilteredOutByImpact,
+  //   volumeRemaining: filteredBySizeAndImpact.reduce((sum, s) => sum + Number(s.usd_volume), 0)
+  // });
 
-  // EDGE CASE: All swaps filtered out by impact
-  if (filteredBySizeAndImpact.length === 0) {
-    KatanaLogger.info(LOG_PREFIX, "All swaps filtered out by minimum impact, returning 0");
-    return { perPairData: [], totalEligibleVolume: 0, totalFees: 0 };
-  }
+  // // EDGE CASE: All swaps filtered out by impact
+  // if (filteredBySizeAndImpact.length === 0) {
+  //   KatanaLogger.info(LOG_PREFIX, "All swaps filtered out by minimum impact, returning 0");
+  //   return { perPairData: [], totalEligibleVolume: 0, totalFees: 0 };
+  // }
+
+  // Bypass impact filter - use size-filtered swaps directly
+  const filteredBySizeAndImpact = filteredBySize;
 
   // ============================================================================
   // STEP 2: ROUND-TRIP DETECTION (5-minute windows)
@@ -564,10 +568,11 @@ export const getEligibleVolumeAndFees = (swaps: SushiswapActivity[]): {
         swapsRemoved: filteredOutBySize,
         volumeRemoved: volumeFilteredOutBySize
       },
-      step1b_impactFilter: {
-        swapsRemoved: filteredOutByImpact,
-        volumeRemoved: volumeFilteredOutByImpact
-      },
+      // COMMENTED OUT TEMPORARILY - minImpact filter
+      // step1b_impactFilter: {
+      //   swapsRemoved: filteredOutByImpact,
+      //   volumeRemoved: volumeFilteredOutByImpact
+      // },
       step2_roundTrips: {
         swapsRemoved: filteredBySizeAndImpact.length - afterRoundTripRemoval.length,
         volumeRemoved: roundTripVolumeRemoved
