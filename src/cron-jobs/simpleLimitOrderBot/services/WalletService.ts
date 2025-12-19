@@ -118,7 +118,10 @@ export class WalletService {
       return true
 
     } catch (error) {
-      await transaction.rollback()
+      // Only rollback if transaction hasn't been rolled back already
+      if (!transaction.finished) {
+        await transaction.rollback()
+      }
       KatanaLogger.error(PREFIX, 'Failed to increment counter', error)
       throw error
     }

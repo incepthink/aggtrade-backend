@@ -6,6 +6,7 @@ import BotWalletExecution from './BotWalletExecution'
 import BotLimitOrder from './BotLimitOrder'
 import BotWallet from './BotWallet'
 import BotOrdersSimple from './BotOrdersSimple'
+import XpDistribution from './XpDistribution'
 
 const defineAssociations = () => {
   // BotWalletExecution <-> BotLimitOrder (one-to-many)
@@ -50,8 +51,18 @@ const defineAssociations = () => {
     foreignKey: 'referred_user_id',
     as: 'referredUser'
   })
+
+  // User <-> XpDistribution (one-to-many)
+  User.hasMany(XpDistribution, {
+    foreignKey: 'user_id',
+    as: 'xpDistributions'
+  })
+  XpDistribution.belongsTo(User, {
+    foreignKey: 'user_id',
+    as: 'user'
+  })
 }
 
 defineAssociations()
 
-export { User, ReferralCode, Referral, KatanaSwap, BotWalletExecution, BotLimitOrder, BotWallet, BotOrdersSimple }
+export { User, ReferralCode, Referral, KatanaSwap, BotWalletExecution, BotLimitOrder, BotWallet, BotOrdersSimple, XpDistribution }

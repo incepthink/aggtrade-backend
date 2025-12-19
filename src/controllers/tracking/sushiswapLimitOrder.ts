@@ -117,6 +117,16 @@ export const syncLimitOrders = async (req: Request, res: Response, next: NextFun
         ? parseFloat(order.tradeDollarValueIn)
         : order.usdVolume || 0
 
+      // Calculate fees from SDK data (filledDollarValueIn - filledDollarValueOut)
+      let fees_usd: number | null = null
+      if (order.filledDollarValueIn && order.filledDollarValueOut) {
+        const filledIn = parseFloat(order.filledDollarValueIn)
+        const filledOut = parseFloat(order.filledDollarValueOut)
+        if (!isNaN(filledIn) && !isNaN(filledOut) && filledIn >= filledOut) {
+          fees_usd = filledIn - filledOut
+        }
+      }
+
       // Calculate execution price
       let executionPrice = 0
       if (parseFloat(filledSrcAmount) > 0 && parseFloat(filledDstAmount) > 0) {
@@ -155,6 +165,7 @@ export const syncLimitOrders = async (req: Request, res: Response, next: NextFun
           progress: progress,
           status: status,
           usd_volume: usdVolume,
+          fees_usd: fees_usd,
           execution_price: executionPrice,
           metadata: {
             ...existing.metadata,
@@ -182,6 +193,7 @@ export const syncLimitOrders = async (req: Request, res: Response, next: NextFun
           token_to_symbol: dstTokenSymbol,
           token_to_amount: dstAmount,
           usd_volume: usdVolume,
+          fees_usd: fees_usd,
           execution_price: executionPrice,
           pool_id: null,
           order_id: orderId,

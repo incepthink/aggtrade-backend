@@ -73,7 +73,7 @@ export class OrderStatusService {
     KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Found ${dbOrders.length} active orders`)
 
     if (TEST_MODE_CONFIG.enabled) {
-      return this.pollOrderStatusTestMode(dbOrders, walletIndex)
+      return this.pollOrderStatusTestMode(dbOrders, walletAddress, walletIndex)
     }
 
     return this.pollOrderStatusProduction(dbOrders, walletAddress, walletIndex)
@@ -147,11 +147,26 @@ export class OrderStatusService {
   /**
    * Test mode: Simulate fills
    */
-  private static pollOrderStatusTestMode(
+  private static async pollOrderStatusTestMode(
     dbOrders: any[],
+    walletAddress: string,
     walletIndex: number
-  ): OrderStatusUpdate[] {
+  ): Promise<OrderStatusUpdate[]> {
     KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] [TEST MODE] Simulating status updates...`)
+
+    // Fetch blockchain orders
+    let blockchainOrders: any
+    try {
+      blockchainOrders = await TwapService.fetchLimitOrders(walletAddress)
+    } catch (error) {
+      KatanaLogger.error(PREFIX, `[Wallet ${walletIndex}] [TEST MODE] Failed to fetch blockchain orders`, error)
+      return []
+    }
+
+    KatanaLogger.info(
+      PREFIX,
+      `[Wallet ${walletIndex}] [TEST MODE] Blockchain: ${blockchainOrders.OPEN.length} OPEN, ${blockchainOrders.COMPLETED.length} COMPLETED`
+    )
 
     const updates: OrderStatusUpdate[] = []
 
