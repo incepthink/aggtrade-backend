@@ -417,7 +417,7 @@ export const getEligibleVolumeAndFees = (swaps: SushiswapActivity[]): {
   //      - Trades with < 1bp impact may indicate wash trading or self-matching
   // How: Filter on both usd_volume and price_impact fields
 
-  const minFillSize = 10; // $10 USD minimum
+  const minFillSize = 8; // $10 USD minimum
   const minImpact = 0.0001; // 1 basis point (1bp = 0.01% = 0.0001)
 
   const filteredBySize = swaps.filter(swap => Number(swap.usd_volume) >= minFillSize);

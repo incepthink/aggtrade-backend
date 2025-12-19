@@ -279,8 +279,6 @@ export class TwapService {
     // Fetch orders from blockchain
     console.log('📡 Fetching orders from blockchain...')
     const rawOrders = await this.sdk.getOrders(walletAddress)
-    console.log(rawOrders);
-    
     console.log(`✅ Found ${rawOrders.length} orders`)
 
     // Enhance orders with metadata
