@@ -23,6 +23,7 @@ interface ClassicSwapRequest {
     amount: string
   }
   usdVolume: number
+  priceImpact?: number
   fees_usd?: number
   executionPrice: number
   poolId?: string
@@ -90,6 +91,7 @@ export const logClassicSwap = async (req: Request, res: Response, next: NextFunc
       usd_volume: data.usdVolume,
       fees_usd: data.fees_usd !== undefined ? data.fees_usd : null,
       execution_price: data.executionPrice,
+      price_impact: data.priceImpact !== undefined ? data.priceImpact : 0,
       pool_id: data.poolId || null,
       order_id: null,
       filled_src_amount: null,
