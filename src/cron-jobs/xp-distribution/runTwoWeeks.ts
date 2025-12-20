@@ -60,7 +60,7 @@ export const runCurrentAndLastWeek = async (testWalletAddress?: string) => {
 // ============================================================================
 
 // Run for all wallets in both weeks:
-runCurrentAndLastWeek("0xac752eb88d460d234d016d3e8ac10f1b05a9eb6f")
+runCurrentAndLastWeek()
 
 // TEST MODE: Run for single wallet in both weeks:
 // runCurrentAndLastWeek('0x8c26601997966e439a4245054df2576d54a70f29')

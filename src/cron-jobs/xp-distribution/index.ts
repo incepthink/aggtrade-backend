@@ -60,6 +60,48 @@ export const disrtibuteXPJob = async (
 
     if (allLimitOrders.length === 0) {
         console.log("\n⚠️  No limit orders found for the specified criteria")
+
+        // If testing a specific wallet, store 0 XP record
+        if (testWalletAddress) {
+            console.log(`\n📝 Storing 0 XP record for wallet: ${testWalletAddress}`)
+
+            // Find user_id if exists
+            const user = await User.findOne({ where: { wallet_address: testWalletAddress.toLowerCase() } })
+
+            try {
+                const [xpRecord, created] = await XpDistribution.upsert({
+                    wallet_address: testWalletAddress.toLowerCase(),
+                    user_id: user?.id || null,
+                    week_start: weekStart,
+                    week_end: weekEnd,
+                    league: 'bronze' as 'bronze' | 'silver' | 'gold' | 'diamond',
+                    swap_xp_raw: 0,
+                    swap_xp_decayed: 0,
+                    pair_bonus_xp: 0,
+                    total_xp: 0,
+                    eligible_volume: 0,
+                    total_fees: 0,
+                    unique_pairs_count: 0,
+                    new_pairs_count: 0,
+                    total_swaps: 0,
+                    metadata: {
+                        perPairResults: [],
+                        newPairs: [],
+                        feeUpdateSummary: {
+                            ordersProcessed: feeUpdateResult.totalOrders,
+                            feesUpdated: feeUpdateResult.feesUpdated
+                        },
+                        note: "No limit orders found for this period"
+                    },
+                    calculated_at: new Date()
+                })
+
+                console.log(`✅ 0 XP record saved to database (${created ? 'created' : 'updated'})`)
+            } catch (error) {
+                console.error(`❌ Failed to save 0 XP record to database:`, error)
+            }
+        }
+
         return
     }
 
