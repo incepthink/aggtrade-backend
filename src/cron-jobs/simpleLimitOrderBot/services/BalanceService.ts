@@ -79,4 +79,58 @@ export class BalanceService {
 
     return { orderSize, orderSizeUsd }
   }
+
+  /**
+   * Calculate dynamic order sizing based on available balance
+   * @param tokenBalance - Available token balance (human-readable)
+   * @param tokenPrice - Current token price in USD
+   * @param minOrderSizeUsd - Minimum order size in USD
+   * @param maxOffsets - Maximum pairs available from offset array
+   * @returns Order sizing information including max pairs affordable
+   */
+  static calculateDynamicOrderSize(
+    tokenBalance: string,
+    tokenPrice: number,
+    minOrderSizeUsd: number,
+    maxOffsets: number
+  ): {
+    orderSize: string
+    orderSizeUsd: number
+    maxPairsAffordable: number
+    totalValueUsd: number
+  } {
+    const balance = parseFloat(tokenBalance)
+    const balanceUsd = balance * tokenPrice
+
+    // Calculate how many pairs we can afford
+    const maxPairsAffordable = Math.floor(balanceUsd / minOrderSizeUsd)
+
+    // Cap at available offsets
+    const actualPairs = Math.min(maxPairsAffordable, maxOffsets)
+
+    // If we can't afford even 1 pair, return zeros
+    if (actualPairs < 1) {
+      KatanaLogger.warn(
+        PREFIX,
+        `Insufficient balance: $${balanceUsd.toFixed(2)} < minimum $${minOrderSizeUsd}`
+      )
+      return {
+        orderSize: '0',
+        orderSizeUsd: 0,
+        maxPairsAffordable: 0,
+        totalValueUsd: balanceUsd
+      }
+    }
+
+    // Calculate order size for this many pairs
+    const orderSizeUsd = balanceUsd / actualPairs
+    const orderSize = (orderSizeUsd / tokenPrice).toFixed(18)
+
+    KatanaLogger.info(
+      PREFIX,
+      `Dynamic sizing: balance=$${balanceUsd.toFixed(2)}, pairs=${actualPairs}, size=$${orderSizeUsd.toFixed(2)}`
+    )
+
+    return { orderSize, orderSizeUsd, maxPairsAffordable: actualPairs, totalValueUsd: balanceUsd }
+  }
 }

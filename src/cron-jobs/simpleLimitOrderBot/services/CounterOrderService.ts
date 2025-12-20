@@ -135,6 +135,7 @@ export class CounterOrderService {
             swap_type: 'LIMIT_ORDER',
             tx_hash: uniqueTxHash,
             chain_id: this.CHAIN_ID,
+            price_impact: 0,
             block_number: null,
             block_timestamp: new Date(),
             token_from_address: fromToken.address,

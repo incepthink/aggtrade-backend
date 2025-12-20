@@ -6,13 +6,14 @@
 import { getToken } from '../gridBot/tokenPairs.config'
 import { getCurrentTokenPrice } from '../gridBot/priceManager'
 import { KatanaLogger } from '../../utils/logger'
-import { getGridConfigForPair } from './config'
+import { getGridConfigForPair, STRATEGY_RESTART_CONFIG } from './config'
 import { WalletService, type WalletWithSigner } from './services/WalletService'
 import { BalanceService } from './services/BalanceService'
 import { OrderConstructionService } from './services/OrderConstructionService'
 import { OrderExecutionService } from './services/OrderExecutionService'
 import BotOrdersSimple from '../../models/BotOrdersSimple'
 import { TwapService } from '../../services/twap'
+import { Op } from 'sequelize'
 
 const PREFIX = '[PlaceInitialOrders]'
 
@@ -26,11 +27,21 @@ async function verifyNoBlockchainDuplicates(
   try {
     KatanaLogger.info(PREFIX, `Safety check for pair ${pairIndex + 1}...`)
 
-    const dbOrders = await BotOrdersSimple.findAll({
-      where: {
-        wallet_address: wallet.address.toLowerCase(),
-        order_type: ['grid_buy', 'grid_sell']
+    // Build query conditions
+    const whereConditions: any = {
+      wallet_address: wallet.address.toLowerCase(),
+      order_type: ['grid_buy', 'grid_sell']
+    }
+
+    // If this wallet needs to restart strategy, only count orders after cutoff
+    if (STRATEGY_RESTART_CONFIG.shouldFilterOldOrders(wallet.index)) {
+      whereConditions.placed_at = {
+        [Op.gte]: STRATEGY_RESTART_CONFIG.cutoffDate
       }
+    }
+
+    const dbOrders = await BotOrdersSimple.findAll({
+      where: whereConditions
     })
 
     const expectedOrderCount = pairIndex * 2
@@ -72,7 +83,7 @@ async function placeOrderPair(
   const buyOffset = pairConfig.BUY_OFFSETS[pairIndex]
   const sellOffset = pairConfig.SELL_OFFSETS[pairIndex]
 
-  KatanaLogger.info(PREFIX, `\nPair ${pairIndex + 1}/5: BUY ${buyOffset}%, SELL ${sellOffset}%`)
+  KatanaLogger.info(PREFIX, `\nPair ${pairIndex + 1}: BUY ${buyOffset}%, SELL ${sellOffset}%`)
 
   try {
     // Construct order pair (balance already synced at wallet level)
@@ -89,7 +100,8 @@ async function placeOrderPair(
       sellOffset,
       currentPrice,
       baseTokenPrice,
-      pairConfig.EXPIRY_HOURS
+      pairConfig.EXPIRY_HOURS,
+      pairConfig.MIN_ORDER_SIZE_USD
     )
 
     KatanaLogger.info(PREFIX, 'Both orders constructed successfully')
@@ -107,11 +119,11 @@ async function placeOrderPair(
     await OrderExecutionService.executeOrder(wallet.signer, sellOrder, wallet.index)
     KatanaLogger.info(PREFIX, '✅ SELL order placed')
 
-    KatanaLogger.info(PREFIX, `✅ Pair ${pairIndex + 1}/5 completed successfully`)
+    KatanaLogger.info(PREFIX, `✅ Pair ${pairIndex + 1} completed successfully`)
     return true
 
   } catch (error) {
-    KatanaLogger.error(PREFIX, `Pair ${pairIndex + 1}/5 failed`, error)
+    KatanaLogger.error(PREFIX, `Pair ${pairIndex + 1} failed`, error)
     return false
   }
 }
@@ -146,11 +158,55 @@ export async function placeInitialOrders(
     KatanaLogger.info(PREFIX, `${targetToken.symbol}: $${currentPrice}`)
     KatanaLogger.info(PREFIX, `${baseToken.symbol}: $${baseTokenPrice}`)
 
+    // Get balances to determine how many pairs we can afford
+    const { balanceHuman: baseBalance } = await BalanceService.getBalance(
+      wallet.signer.provider!,
+      baseToken.address,
+      wallet.address,
+      baseToken.isNative,
+      baseToken.decimals
+    )
+
+    const { balanceHuman: targetBalance } = await BalanceService.getBalance(
+      wallet.signer.provider!,
+      targetToken.address,
+      wallet.address,
+      targetToken.isNative,
+      targetToken.decimals
+    )
+
+    // Calculate max pairs affordable for each side
+    const baseSizing = BalanceService.calculateDynamicOrderSize(
+      baseBalance,
+      baseTokenPrice,
+      pairConfig.MIN_ORDER_SIZE_USD,
+      pairConfig.BUY_OFFSETS.length
+    )
+
+    const targetSizing = BalanceService.calculateDynamicOrderSize(
+      targetBalance,
+      currentPrice,
+      pairConfig.MIN_ORDER_SIZE_USD,
+      pairConfig.SELL_OFFSETS.length
+    )
+
+    // Total pairs = minimum of both sides (need both buy and sell for each pair)
+    const totalPairs = Math.min(baseSizing.maxPairsAffordable, targetSizing.maxPairsAffordable)
+
+    KatanaLogger.info(PREFIX, `Base balance: ${baseBalance} ${baseToken.symbol} ($${baseSizing.totalValueUsd.toFixed(2)})`)
+    KatanaLogger.info(PREFIX, `Target balance: ${targetBalance} ${targetToken.symbol} ($${targetSizing.totalValueUsd.toFixed(2)})`)
+    KatanaLogger.info(PREFIX, `Max pairs: ${baseSizing.maxPairsAffordable} buy, ${targetSizing.maxPairsAffordable} sell → ${totalPairs} total`)
+
+    // If insufficient balance, exit early
+    if (totalPairs === 0) {
+      KatanaLogger.warn(PREFIX, `⚠️  Insufficient balance for any pairs (min $${pairConfig.MIN_ORDER_SIZE_USD} per order)`)
+      return
+    }
+
     // Place remaining pairs
     const startFrom = botWalletRecord.placed_initial_orders
-    const totalPairs = 5
 
-    KatanaLogger.info(PREFIX, `Starting from pair ${startFrom + 1}/5`)
+    KatanaLogger.info(PREFIX, `Starting from pair ${startFrom + 1}/${totalPairs}`)
 
     let successfulPairs = 0
     let failedPairs = 0
@@ -159,14 +215,14 @@ export async function placeInitialOrders(
 
     for (let i = startFrom; i < totalPairs; i++) {
       KatanaLogger.info(PREFIX, `\n${'='.repeat(60)}`)
-      KatanaLogger.info(PREFIX, `Attempting pair ${i + 1}/5...`)
+      KatanaLogger.info(PREFIX, `Attempting pair ${i + 1}/${totalPairs}...`)
       KatanaLogger.info(PREFIX, `${'='.repeat(60)}`)
 
       // Safety check
       const isSafe = await verifyNoBlockchainDuplicates(wallet, i)
       if (!isSafe) {
         const reason = `Safety check failed - duplicate orders detected`
-        KatanaLogger.warn(PREFIX, `⚠️  Pair ${i + 1}/5 SKIPPED: ${reason}`)
+        KatanaLogger.warn(PREFIX, `⚠️  Pair ${i + 1}/${totalPairs} SKIPPED: ${reason}`)
         skippedPairs.push(i + 1)
         skipReasons.push(`Pair ${i + 1}: ${reason}`)
         failedPairs++
@@ -204,7 +260,7 @@ export async function placeInitialOrders(
       }
 
       successfulPairs++
-      KatanaLogger.info(PREFIX, `Pair ${i + 1}/5 completed`)
+      KatanaLogger.info(PREFIX, `Pair ${i + 1}/${totalPairs} completed`)
 
       if (i < totalPairs - 1) {
         await new Promise(resolve => setTimeout(resolve, 3000))
@@ -236,11 +292,11 @@ export async function placeInitialOrders(
 
     // Check completion
     const finalCount = await WalletService.getWalletRecord(wallet.address)
-    if (finalCount && finalCount.placed_initial_orders === 5) {
-      KatanaLogger.info(PREFIX, `\n🎉 All 5 pairs placed successfully!`)
+    if (finalCount && finalCount.placed_initial_orders === totalPairs) {
+      KatanaLogger.info(PREFIX, `\n🎉 All ${totalPairs} pairs placed successfully!`)
     } else if (finalCount && finalCount.placed_initial_orders > startFrom) {
       KatanaLogger.info(PREFIX, `\n✅ Placed ${finalCount.placed_initial_orders - startFrom} additional pair(s)`)
-      KatanaLogger.info(PREFIX, `📊 Total placed: ${finalCount.placed_initial_orders}/5`)
+      KatanaLogger.info(PREFIX, `📊 Total placed: ${finalCount.placed_initial_orders}/${totalPairs}`)
     }
     KatanaLogger.info(PREFIX, `${'='.repeat(60)}`)
 

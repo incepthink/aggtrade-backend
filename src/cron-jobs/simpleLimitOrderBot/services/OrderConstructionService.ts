@@ -113,7 +113,8 @@ export class OrderConstructionService {
     sellOffset: number,
     currentPrice: number,
     baseTokenPrice: number,
-    expiryHours: number
+    expiryHours: number,
+    minOrderSizeUsd: number
   ): Promise<{ buyOrder: ConstructedOrder; sellOrder: ConstructedOrder }> {
     KatanaLogger.info(PREFIX, `Constructing pair: BUY ${buyOffset}%, SELL ${sellOffset}%`)
 
@@ -136,10 +137,18 @@ export class OrderConstructionService {
 
     // Calculate order sizes
     const buyPrice = currentPrice * (1 + buyOffset / 100)
-    const { orderSize: buyAmount } = BalanceService.calculateOrderSize(baseBalance, baseTokenPrice)
+    const { orderSize: buyAmount } = BalanceService.calculateOrderSize(
+      baseBalance,
+      baseTokenPrice,
+      minOrderSizeUsd
+    )
 
     const sellPrice = currentPrice * (1 + sellOffset / 100)
-    const { orderSize: sellAmount } = BalanceService.calculateOrderSize(targetBalance, currentPrice)
+    const { orderSize: sellAmount } = BalanceService.calculateOrderSize(
+      targetBalance,
+      currentPrice,
+      minOrderSizeUsd
+    )
 
     // Calculate correct limit prices
     // Buy order: spending baseToken to get targetToken

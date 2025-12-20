@@ -43,9 +43,10 @@ async function processWallet(
 
     // Check if initial orders are complete
     const placedInitialOrders = botWalletRecord.placed_initial_orders
-    KatanaLogger.info(PREFIX, `[${walletNum}/${totalWallets}] Initial orders placed: ${placedInitialOrders}/5`)
+    KatanaLogger.info(PREFIX, `[${walletNum}/${totalWallets}] Initial orders placed: ${placedInitialOrders}`)
 
-    if (placedInitialOrders < 5) {
+    // Always attempt to place orders - placeInitialOrders will determine if balance allows more
+    if (true) {
       // Place remaining initial order pairs
       KatanaLogger.info(PREFIX, `[${walletNum}/${totalWallets}] Placing initial order pairs...`)
       await placeInitialOrders(wallet, botWalletRecord)

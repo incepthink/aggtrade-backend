@@ -8,7 +8,8 @@ import { TwapService, type TwapOrder } from '../../../services/twap'
 import { getToken } from '../../gridBot/tokenPairs.config'
 import { toWei, fromWei } from '../../utils/botHelpers'
 import { KatanaLogger } from '../../../utils/logger'
-import { TEST_MODE_CONFIG } from '../config'
+import { TEST_MODE_CONFIG, STRATEGY_RESTART_CONFIG } from '../config'
+import { Op } from 'sequelize'
 
 const PREFIX = '[OrderStatus]'
 
@@ -57,11 +58,25 @@ export class OrderStatusService {
   ): Promise<OrderStatusUpdate[]> {
     KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Polling order status...`)
 
+    // Build query conditions
+    const whereConditions: any = {
+      wallet_address: walletAddress.toLowerCase(),
+      status: ['pending', 'partial']
+    }
+
+    // If this wallet needs to restart strategy, filter out old orders
+    if (STRATEGY_RESTART_CONFIG.shouldFilterOldOrders(walletIndex)) {
+      whereConditions.placed_at = {
+        [Op.gte]: STRATEGY_RESTART_CONFIG.cutoffDate
+      }
+      KatanaLogger.info(
+        PREFIX,
+        `[Wallet ${walletIndex}] ♻️  Strategy restart active - ignoring orders placed before ${STRATEGY_RESTART_CONFIG.cutoffDate.toISOString()}`
+      )
+    }
+
     const dbOrders = await BotOrdersSimple.findAll({
-      where: {
-        wallet_address: walletAddress.toLowerCase(),
-        status: ['pending', 'partial']
-      },
+      where: whereConditions,
       order: [['placed_at', 'ASC']]
     })
 

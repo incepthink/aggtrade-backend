@@ -10,7 +10,8 @@ import { CounterOrderService } from './services/CounterOrderService'
 import BotOrdersSimple from '../../models/BotOrdersSimple'
 import { getToken } from '../gridBot/tokenPairs.config'
 import { toWei } from '../utils/botHelpers'
-import { getGridConfigForPair } from './config'
+import { getGridConfigForPair, STRATEGY_RESTART_CONFIG } from './config'
+import { Op } from 'sequelize'
 
 const PREFIX = '[CheckCounterOrders]'
 
@@ -24,12 +25,26 @@ async function verifyAndPlaceMissingCounterOrders(
   KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Verifying all filled orders have counter orders...`)
 
   try {
+    // Build query conditions
+    const whereConditions: any = {
+      wallet_address: wallet.address.toLowerCase(),
+      status: 'filled'
+    }
+
+    // If this wallet needs to restart strategy, filter out old orders
+    if (STRATEGY_RESTART_CONFIG.shouldFilterOldOrders(wallet.index)) {
+      whereConditions.placed_at = {
+        [Op.gte]: STRATEGY_RESTART_CONFIG.cutoffDate
+      }
+      KatanaLogger.info(
+        PREFIX,
+        `[Wallet ${wallet.index}] ♻️  Strategy restart active - ignoring orders placed before ${STRATEGY_RESTART_CONFIG.cutoffDate.toISOString()}`
+      )
+    }
+
     // Get ALL filled orders (grid and counter orders)
     const filledOrders = await BotOrdersSimple.findAll({
-      where: {
-        wallet_address: wallet.address.toLowerCase(),
-        status: 'filled'
-      },
+      where: whereConditions,
       order: [['filled_at', 'ASC']]
     })
 

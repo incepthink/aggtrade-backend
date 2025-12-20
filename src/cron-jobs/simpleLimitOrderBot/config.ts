@@ -39,7 +39,7 @@ export const PAIR_GRID_CONFIGS: Record<string, {
   'USDC/WETH': {
     BUY_OFFSETS: [-0.04, -0.06, -0.08, -0.10, -0.12],     // 5 buy orders
     SELL_OFFSETS: [0.04, 0.06, 0.08, 0.10, 0.12],         // 5 sell orders
-    MIN_ORDER_SIZE_USD: 8,  // $100 / 5 pairs / 2 orders per pair = ~$10 per order
+    MIN_ORDER_SIZE_USD: 10,  // Minimum $10 per order
     EXPIRY_HOURS: 12,       // Shorter expiry for faster capital recycling
     PROFIT_MARGIN_PERCENT: 0.15,  // Tight margin for fast counter fills
     DESCRIPTION: 'Ultra-aggressive for highest liquidity pair'
@@ -49,7 +49,7 @@ export const PAIR_GRID_CONFIGS: Record<string, {
   'USDC/WBTC': {
     BUY_OFFSETS: [-0.04, -0.06, -0.08, -0.10, -0.12],
     SELL_OFFSETS: [0.04, 0.06, 0.08, 0.10, 0.12],
-    MIN_ORDER_SIZE_USD: 8,
+    MIN_ORDER_SIZE_USD: 10,
     EXPIRY_HOURS: 12,
     PROFIT_MARGIN_PERCENT: 0.15,
     DESCRIPTION: 'Ultra-aggressive for high liquidity BTC pair'
@@ -59,7 +59,7 @@ export const PAIR_GRID_CONFIGS: Record<string, {
   'WBTC/WETH': {
     BUY_OFFSETS: [-0.05, -0.10, -0.15, -0.20, -0.25],
     SELL_OFFSETS: [0.05, 0.10, 0.15, 0.20, 0.25],
-    MIN_ORDER_SIZE_USD: 8,
+    MIN_ORDER_SIZE_USD: 10,
     EXPIRY_HOURS: 12,
     PROFIT_MARGIN_PERCENT: 0.25,  // Wider margin for safety
     DESCRIPTION: 'Aggressive for cross-asset pair'
@@ -69,7 +69,7 @@ export const PAIR_GRID_CONFIGS: Record<string, {
   'WETH/USDC': {
     BUY_OFFSETS: [-0.04, -0.06, -0.08, -0.10, -0.12],
     SELL_OFFSETS: [0.04, 0.06, 0.08, 0.10, 0.12],
-    MIN_ORDER_SIZE_USD: 8,
+    MIN_ORDER_SIZE_USD: 10,
     EXPIRY_HOURS: 12,
     PROFIT_MARGIN_PERCENT: 0.15,
     DESCRIPTION: 'Same as USDC/WETH (reverse notation)'
@@ -78,7 +78,7 @@ export const PAIR_GRID_CONFIGS: Record<string, {
   'WBTC/USDC': {
     BUY_OFFSETS: [-0.04, -0.06, -0.08, -0.10, -0.12],
     SELL_OFFSETS: [0.04, 0.06, 0.08, 0.10, 0.12],
-    MIN_ORDER_SIZE_USD: 8,
+    MIN_ORDER_SIZE_USD: 10,
     EXPIRY_HOURS: 12,
     PROFIT_MARGIN_PERCENT: 0.15,
     DESCRIPTION: 'Same as USDC/WBTC (reverse notation)'
@@ -87,7 +87,7 @@ export const PAIR_GRID_CONFIGS: Record<string, {
   'WETH/WBTC': {
     BUY_OFFSETS: [-0.05, -0.10, -0.15, -0.20, -0.25],
     SELL_OFFSETS: [0.05, 0.10, 0.15, 0.20, 0.25],
-    MIN_ORDER_SIZE_USD: 8,
+    MIN_ORDER_SIZE_USD: 10,
     EXPIRY_HOURS: 12,
     PROFIT_MARGIN_PERCENT: 0.25,
     DESCRIPTION: 'Same as WBTC/WETH (reverse notation)'
@@ -101,7 +101,7 @@ export const PAIR_GRID_CONFIGS: Record<string, {
 export const GRID_CONFIG = {
   BUY_OFFSETS: [-0.1, -0.15, -0.2, -0.25, -0.3],
   SELL_OFFSETS: [0.1, 0.15, 0.2, 0.25, 0.3],
-  MIN_ORDER_SIZE_USD: 8,
+  MIN_ORDER_SIZE_USD: 10,
   EXPIRY_HOURS: 12
 }
 
@@ -111,7 +111,7 @@ export const GRID_CONFIG = {
  */
 export const COUNTER_ORDER_CONFIG = {
   PROFIT_MARGIN_PERCENT: 0.2,  // Default, overridden by pair-specific config
-  MIN_ORDER_SIZE_USD: 8,
+  MIN_ORDER_SIZE_USD: 10,
   EXPIRY_HOURS: 12
 }
 
@@ -159,3 +159,43 @@ export const TEST_MODE_CONFIG = {
   intervalSeconds: 10,
   simulatedOrders: new Map<string, any[]>()
 }
+
+/**
+ * STRATEGY RESTART CONFIG
+ * For wallets that need to restart their strategy fresh
+ * Ignores orders placed before the cutoff date (does not modify DB)
+ *
+ * The cutoff date is set to the service startup time, so restarting
+ * the service will automatically restart the strategy for these wallets
+ *
+ * TIMEZONE HANDLING:
+ * - cutoffDate uses Date object which represents an absolute moment in time
+ * - MySQL stores timestamps in UTC
+ * - Sequelize automatically converts between timezones when comparing
+ * - This works regardless of EC2 system timezone vs local machine timezone
+ */
+export const STRATEGY_RESTART_CONFIG = {
+  // Wallet indices that should restart (1-19)
+  restartWallets: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+
+  // Cutoff timestamp - set to service startup time (NOW)
+  // All orders placed BEFORE this service restart will be ignored for restart wallets
+  // Using Date object which represents absolute moment in time (timezone-agnostic internally)
+  cutoffDate: new Date(),
+
+  // Helper function to check if a wallet should filter old orders
+  shouldFilterOldOrders(walletIndex: number): boolean {
+    return this.restartWallets.includes(walletIndex)
+  }
+}
+
+// Log the restart configuration at startup
+console.log('\n' + '='.repeat(70))
+console.log('🔄 STRATEGY RESTART CONFIGURATION')
+console.log('='.repeat(70))
+console.log(`Restart wallets: ${STRATEGY_RESTART_CONFIG.restartWallets.join(', ')}`)
+console.log(`Cutoff date (UTC): ${STRATEGY_RESTART_CONFIG.cutoffDate.toISOString()}`)
+console.log(`Cutoff date (Local): ${STRATEGY_RESTART_CONFIG.cutoffDate.toString()}`)
+console.log(`Cutoff timestamp (ms): ${STRATEGY_RESTART_CONFIG.cutoffDate.getTime()}`)
+console.log(`All orders placed BEFORE this time will be IGNORED for restart wallets`)
+console.log('='.repeat(70) + '\n')
