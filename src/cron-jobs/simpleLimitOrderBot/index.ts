@@ -12,7 +12,7 @@ import { ethers } from 'ethers'
 import { KatanaLogger } from '../../utils/logger'
 import { placeInitialOrders } from './placeInitialOrders'
 import { checkCounterOrders } from './checkCounterOrders'
-import { BOT_CONFIG, TEST_MODE_CONFIG, RATE_LIMIT_CONFIG } from './config'
+import { BOT_CONFIG, TEST_MODE_CONFIG, RATE_LIMIT_CONFIG, STRATEGY_RESTART_CONFIG } from './config'
 import { WalletService } from './services/WalletService'
 import { BalanceService } from './services/BalanceService'
 import { TOKEN_COLUMN_MAPPING } from '../utils/botBalanceUpdater'
@@ -41,8 +41,18 @@ async function processWallet(
     KatanaLogger.info(PREFIX, `[${walletNum}/${totalWallets}] Syncing wallet balances...`)
     await BalanceService.syncBalances(wallet.signer.provider!, wallet.address)
 
-    // Check if initial orders are complete
-    const placedInitialOrders = botWalletRecord.placed_initial_orders
+    // Check if this wallet needs strategy restart
+    let placedInitialOrders = botWalletRecord.placed_initial_orders
+    if (STRATEGY_RESTART_CONFIG.shouldFilterOldOrders(wallet.index)) {
+      KatanaLogger.info(
+        PREFIX,
+        `[${walletNum}/${totalWallets}] ♻️  Strategy restart active - resetting placed_initial_orders from ${placedInitialOrders} to 0`
+      )
+      placedInitialOrders = 0
+      // Override the record so placeInitialOrders sees 0
+      botWalletRecord.placed_initial_orders = 0
+    }
+
     KatanaLogger.info(PREFIX, `[${walletNum}/${totalWallets}] Initial orders placed: ${placedInitialOrders}`)
 
     // Always attempt to place orders - placeInitialOrders will determine if balance allows more
@@ -54,14 +64,25 @@ async function processWallet(
       // After attempting to place initial orders, refresh the record
       const updatedRecord = await WalletService.getWalletRecord(wallet.address)
       if (updatedRecord) {
-        botWalletRecord.placed_initial_orders = updatedRecord.placed_initial_orders
+        // For restart wallets, continue to ignore the DB counter
+        if (STRATEGY_RESTART_CONFIG.shouldFilterOldOrders(wallet.index)) {
+          // Don't update from DB - keep using the overridden value
+          KatanaLogger.info(
+            PREFIX,
+            `[${walletNum}/${totalWallets}] Strategy restart: ignoring DB counter (${updatedRecord.placed_initial_orders})`
+          )
+        } else {
+          botWalletRecord.placed_initial_orders = updatedRecord.placed_initial_orders
+        }
       }
     }
 
     // Always check for counter-orders if we have any placed pairs
     // This ensures that even if not all 5 pairs are complete,
     // we can still place counter orders for filled orders from complete pairs
-    if (botWalletRecord.placed_initial_orders > 0) {
+    // For restart wallets, always check counter orders regardless of DB counter
+    const shouldCheckCounterOrders = STRATEGY_RESTART_CONFIG.shouldFilterOldOrders(wallet.index) || botWalletRecord.placed_initial_orders > 0
+    if (shouldCheckCounterOrders) {
       KatanaLogger.info(PREFIX, `[${walletNum}/${totalWallets}] Checking order status and placing counter-orders...`)
       await checkCounterOrders(wallet, botWalletRecord)
     }

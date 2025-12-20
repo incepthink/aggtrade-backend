@@ -230,7 +230,7 @@ export async function placeInitialOrders(
       }
 
       // Acquire lock
-      const canPlacePair = await WalletService.incrementPlacedOrdersCounter(wallet.address, i)
+      const canPlacePair = await WalletService.incrementPlacedOrdersCounter(wallet.address, i, wallet.index)
 
       if (!canPlacePair) {
         KatanaLogger.warn(PREFIX, `Pair ${i + 1} already placed by another process`)
