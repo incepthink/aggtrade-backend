@@ -201,7 +201,7 @@ export const disrtibuteXPJob = async (
     console.log(`Total records saved: ${savedCount}`)
     console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`)
 }
-disrtibuteXPJob(undefined, '0xac752eb88d460d234d016d3e8ac10f1b05a9eb6f')
+
 // ============================================================================
 // USAGE EXAMPLES
 // ============================================================================
