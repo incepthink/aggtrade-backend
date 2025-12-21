@@ -8,6 +8,7 @@ import { getTokenBalance } from '../../utils/botWalletManager'
 import { updateWalletBalances, TOKEN_COLUMN_MAPPING } from '../../utils/botBalanceUpdater'
 import { fromWei } from '../../utils/botHelpers'
 import { KatanaLogger } from '../../../utils/logger'
+import { DatabaseLogger } from '../../../utils/logging/DatabaseLogger'
 
 const PREFIX = '[BalanceService]'
 
@@ -38,11 +39,24 @@ export class BalanceService {
    */
   static async syncBalances(
     provider: ethers.Provider,
-    walletAddress: string
+    walletAddress: string,
+    walletIndex?: number
   ): Promise<void> {
-    KatanaLogger.info(PREFIX, `Syncing balances for ${walletAddress.slice(0, 8)}...`)
-    await updateWalletBalances(provider, walletAddress, TOKEN_COLUMN_MAPPING)
-    KatanaLogger.info(PREFIX, 'Balances synced successfully')
+    try {
+      await updateWalletBalances(provider, walletAddress, TOKEN_COLUMN_MAPPING)
+    } catch (error: any) {
+      if (walletIndex !== undefined) {
+        await DatabaseLogger.logError(
+          walletIndex,
+          walletAddress,
+          'balance_sync_failed',
+          error.message,
+          'syncBalances'
+        )
+      }
+      KatanaLogger.error(PREFIX, `Failed to sync balances for ${walletAddress.slice(0, 8)}`, error)
+      throw error
+    }
   }
 
   /**
@@ -62,20 +76,11 @@ export class BalanceService {
 
     // Ensure minimum order size
     if (orderSizeUsd < minOrderSizeUsd) {
-      KatanaLogger.warn(
-        PREFIX,
-        `Calculated order size $${orderSizeUsd.toFixed(2)} below minimum $${minOrderSizeUsd}`
-      )
       orderSizeUsd = minOrderSizeUsd
     }
 
     // Convert back to token amount
     const orderSize = (orderSizeUsd / tokenPrice).toFixed(18)
-
-    KatanaLogger.info(
-      PREFIX,
-      `Order sizing: balance=$${balanceUsd.toFixed(2)}, size=$${orderSizeUsd.toFixed(2)}`
-    )
 
     return { orderSize, orderSizeUsd }
   }
@@ -110,10 +115,6 @@ export class BalanceService {
 
     // If we can't afford even 1 pair, return zeros
     if (actualPairs < 1) {
-      KatanaLogger.warn(
-        PREFIX,
-        `Insufficient balance: $${balanceUsd.toFixed(2)} < minimum $${minOrderSizeUsd}`
-      )
       return {
         orderSize: '0',
         orderSizeUsd: 0,
@@ -125,11 +126,6 @@ export class BalanceService {
     // Calculate order size for this many pairs
     const orderSizeUsd = balanceUsd / actualPairs
     const orderSize = (orderSizeUsd / tokenPrice).toFixed(18)
-
-    KatanaLogger.info(
-      PREFIX,
-      `Dynamic sizing: balance=$${balanceUsd.toFixed(2)}, pairs=${actualPairs}, size=$${orderSizeUsd.toFixed(2)}`
-    )
 
     return { orderSize, orderSizeUsd, maxPairsAffordable: actualPairs, totalValueUsd: balanceUsd }
   }

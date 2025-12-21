@@ -12,6 +12,7 @@ import { getCurrentTokenPrice } from '../../gridBot/priceManager'
 import { KatanaLogger } from '../../../utils/logger'
 import { ConstructedOrder } from './OrderConstructionService'
 import { TEST_MODE_CONFIG } from '../config'
+import { DatabaseLogger } from '../../../utils/logging/DatabaseLogger'
 
 const PREFIX = '[OrderExecution]'
 
@@ -40,51 +41,61 @@ export class OrderExecutionService {
     order: ConstructedOrder,
     walletIndex: number
   ): Promise<void> {
-    KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Executing ${order.orderType}...`)
+    try {
+      // Step 1: Approve token if needed
+      if (!order.fromToken.isNative) {
+        const approvalResult = await ensureTokenApproval(
+          signer,
+          order.fromToken.address,
+          order.transaction.to,
+          order.fromAmountWei,
+          false
+        )
+      }
 
-    // Step 1: Approve token if needed
-    if (!order.fromToken.isNative) {
-      KatanaLogger.info(PREFIX, `Checking approval for ${order.fromToken.symbol}...`)
-      const approvalResult = await ensureTokenApproval(
-        signer,
-        order.fromToken.address,
-        order.transaction.to,
-        order.fromAmountWei,
-        false
+      // Step 2: Send transaction
+      const txResponse = await signer.sendTransaction(order.transaction)
+
+      // Step 3: Wait for confirmation
+      const receipt = await txResponse.wait()
+
+      // Step 4: Wait for indexing
+      await new Promise(resolve => setTimeout(resolve, 5000))
+
+      // Step 5: Fetch blockchain order ID (silent)
+      let blockchainOrderId = await this.fetchBlockchainOrderId(
+        signer.address,
+        txResponse.hash,
+        true // silent mode
       )
 
-      if (approvalResult.needsApproval) {
-        KatanaLogger.info(PREFIX, `Approved: ${approvalResult.txHash}`)
-      }
+      // Step 6: Save to database
+      await this.saveOrderToDatabase(
+        signer.address,
+        blockchainOrderId,
+        order,
+        null,
+        true // silent mode
+      )
+
+      // Record success metric
+      await DatabaseLogger.recordMetric(walletIndex, signer.address, `order_placed_${order.orderType}`)
+
+    } catch (error: any) {
+      // Log error to database
+      await DatabaseLogger.logError(
+        walletIndex,
+        signer.address,
+        'order_execution_failed',
+        error.message,
+        'executeOrder',
+        { orderType: order.orderType }
+      )
+      await DatabaseLogger.recordMetric(walletIndex, signer.address, 'order_failed')
+
+      KatanaLogger.error(PREFIX, `[Wallet ${walletIndex}] Order execution failed`, error)
+      throw error
     }
-
-    // Step 2: Send transaction
-    KatanaLogger.info(PREFIX, 'Sending transaction...')
-    const txResponse = await signer.sendTransaction(order.transaction)
-    KatanaLogger.info(PREFIX, `Tx sent: ${txResponse.hash}`)
-
-    // Step 3: Wait for confirmation
-    const receipt = await txResponse.wait()
-    KatanaLogger.info(PREFIX, `Confirmed: block ${receipt?.blockNumber}`)
-
-    // Step 4: Wait for indexing
-    await new Promise(resolve => setTimeout(resolve, 5000))
-
-    // Step 5: Fetch blockchain order ID
-    let blockchainOrderId = await this.fetchBlockchainOrderId(
-      signer.address,
-      txResponse.hash
-    )
-
-    // Step 6: Save to database
-    await this.saveOrderToDatabase(
-      signer.address,
-      blockchainOrderId,
-      order,
-      null
-    )
-
-    KatanaLogger.info(PREFIX, `Order executed and saved`)
   }
 
   /**
@@ -95,15 +106,9 @@ export class OrderExecutionService {
     order: ConstructedOrder,
     walletIndex: number
   ): Promise<void> {
-    KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] [TEST MODE] Simulating ${order.orderType}...`)
-
     const timestamp = Date.now()
     const randomPart = Math.random().toString(36).substr(2, 9)
     const simulatedOrderId = `TEST_${timestamp}_${randomPart}`
-    const simulatedTxHash = `0xTEST${timestamp.toString(16)}${randomPart}`
-
-    KatanaLogger.info(PREFIX, `[TEST MODE] Simulated tx: ${simulatedTxHash}`)
-    KatanaLogger.info(PREFIX, `[TEST MODE] Simulated ID: ${simulatedOrderId}`)
 
     await this.saveOrderToDatabase(
       signer.address,
@@ -112,7 +117,8 @@ export class OrderExecutionService {
       null
     )
 
-    KatanaLogger.info(PREFIX, `[TEST MODE] Order simulated and saved`)
+    // Record success metric
+    await DatabaseLogger.recordMetric(walletIndex, signer.address, `order_placed_${order.orderType}`)
   }
 
   /**
@@ -120,22 +126,23 @@ export class OrderExecutionService {
    */
   private static async fetchBlockchainOrderId(
     walletAddress: string,
-    txHash: string
+    txHash: string,
+    silent: boolean = false
   ): Promise<string> {
     try {
-      const orders = await TwapService.fetchLimitOrders(walletAddress)
+      const orders = await TwapService.fetchLimitOrders(walletAddress, silent)
       const newOrder = orders.ALL.find((o: any) => o.txHash === txHash)
       const orderId = newOrder?.id?.toString()
 
       if (orderId) {
-        KatanaLogger.info(PREFIX, `Fetched blockchain order ID: ${orderId}`)
         return orderId
       } else {
-        KatanaLogger.warn(PREFIX, `Could not fetch order ID, using tx hash`)
         return txHash
       }
     } catch (error) {
-      KatanaLogger.error(PREFIX, 'Failed to fetch blockchain order ID', error)
+      if (!silent) {
+        KatanaLogger.error(PREFIX, 'Failed to fetch blockchain order ID', error)
+      }
       return txHash
     }
   }
@@ -147,10 +154,11 @@ export class OrderExecutionService {
     walletAddress: string,
     blockchainOrderId: string,
     order: ConstructedOrder,
-    parentOrderId: number | null
+    parentOrderId: number | null,
+    silent: boolean = false
   ): Promise<void> {
-    // Calculate USD value
-    const tokenPrice = await getCurrentTokenPrice(order.fromToken.symbol)
+    // Calculate USD value (silent mode for price fetch)
+    const tokenPrice = await getCurrentTokenPrice(order.fromToken.symbol, silent)
     const usdValue = parseFloat(order.fromAmount) * tokenPrice
 
     // Check for duplicate blockchain_order_id only
@@ -183,8 +191,6 @@ export class OrderExecutionService {
       last_checked_at: null,
       usd_value: usdValue.toFixed(2)
     })
-
-    KatanaLogger.info(PREFIX, `Saved to database with unique check`)
   }
 
   /**
@@ -210,34 +216,50 @@ export class OrderExecutionService {
     parentOrderId: number,
     walletIndex: number
   ): Promise<void> {
-    KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Executing counter-order...`)
+    try {
+      // Approve token if needed
+      if (!order.fromToken.isNative) {
+        await ensureTokenApproval(
+          signer,
+          order.fromToken.address,
+          order.transaction.to,
+          order.fromAmountWei,
+          false
+        )
+      }
 
-    // Approve token if needed
-    if (!order.fromToken.isNative) {
-      await ensureTokenApproval(
-        signer,
-        order.fromToken.address,
-        order.transaction.to,
-        order.fromAmountWei,
-        false
+      // Send transaction
+      const txResponse = await signer.sendTransaction(order.transaction)
+
+      await txResponse.wait()
+      await new Promise(resolve => setTimeout(resolve, 5000))
+
+      const blockchainOrderId = await this.fetchBlockchainOrderId(
+        signer.address,
+        txResponse.hash,
+        true // silent mode
       )
+
+      await this.saveOrderToDatabase(signer.address, blockchainOrderId, order, parentOrderId, true)
+
+      // Record success metric
+      await DatabaseLogger.recordMetric(walletIndex, signer.address, `order_placed_${order.orderType}`)
+
+    } catch (error: any) {
+      // Log error to database
+      await DatabaseLogger.logError(
+        walletIndex,
+        signer.address,
+        'counter_order_execution_failed',
+        error.message,
+        'executeCounterOrder',
+        { orderType: order.orderType, parentOrderId }
+      )
+      await DatabaseLogger.recordMetric(walletIndex, signer.address, 'order_failed')
+
+      KatanaLogger.error(PREFIX, `[Wallet ${walletIndex}] Counter-order execution failed`, error)
+      throw error
     }
-
-    // Send transaction
-    const txResponse = await signer.sendTransaction(order.transaction)
-    KatanaLogger.info(PREFIX, `Counter-order tx: ${txResponse.hash}`)
-
-    await txResponse.wait()
-    await new Promise(resolve => setTimeout(resolve, 5000))
-
-    const blockchainOrderId = await this.fetchBlockchainOrderId(
-      signer.address,
-      txResponse.hash
-    )
-
-    await this.saveOrderToDatabase(signer.address, blockchainOrderId, order, parentOrderId)
-
-    KatanaLogger.info(PREFIX, `Counter-order executed`)
   }
 
   private static async executeCounterOrderTestMode(
@@ -246,12 +268,11 @@ export class OrderExecutionService {
     parentOrderId: number,
     walletIndex: number
   ): Promise<void> {
-    KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] [TEST MODE] Simulating counter-order...`)
-
     const simulatedOrderId = `TEST_COUNTER_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
 
     await this.saveOrderToDatabase(signer.address, simulatedOrderId, order, parentOrderId)
 
-    KatanaLogger.info(PREFIX, `[TEST MODE] Counter-order simulated`)
+    // Record success metric
+    await DatabaseLogger.recordMetric(walletIndex, signer.address, `order_placed_${order.orderType}`)
   }
 }

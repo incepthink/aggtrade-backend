@@ -8,7 +8,6 @@ import BotWallet from '../../../models/BotWallet'
 import { KatanaLogger } from '../../../utils/logger'
 import sequelize from '../../../utils/db/sequelize'
 import { Transaction } from 'sequelize'
-import { STRATEGY_RESTART_CONFIG } from '../config'
 
 const PREFIX = '[WalletService]'
 
@@ -92,40 +91,18 @@ export class WalletService {
         throw new Error(`Wallet ${walletAddress} not found`)
       }
 
-      // Check if this is a restart wallet
-      const isRestartWallet = walletIndex !== undefined && STRATEGY_RESTART_CONFIG.shouldFilterOldOrders(walletIndex)
+      // Check if another process already incremented
+      if (wallet.placed_initial_orders > expectedValue) {
+        await transaction.rollback()
+        return false
+      }
 
-      if (isRestartWallet) {
-        // For restart wallets, bypass the DB counter check and reset to 0 if needed
-        if (wallet.placed_initial_orders > expectedValue) {
-          KatanaLogger.info(
-            PREFIX,
-            `♻️  Restart wallet: Resetting counter from ${wallet.placed_initial_orders} to ${expectedValue + 1}`
-          )
-          wallet.placed_initial_orders = expectedValue + 1
-          await wallet.save({ transaction })
-          await transaction.commit()
-          return true
-        }
-      } else {
-        // Normal logic for non-restart wallets
-        // Check if another process already incremented
-        if (wallet.placed_initial_orders > expectedValue) {
-          KatanaLogger.warn(
-            PREFIX,
-            `Counter already at ${wallet.placed_initial_orders}, expected ${expectedValue}`
-          )
-          await transaction.rollback()
-          return false
-        }
-
-        // Verify expected value
-        if (wallet.placed_initial_orders !== expectedValue) {
-          await transaction.rollback()
-          throw new Error(
-            `Counter mismatch: expected ${expectedValue}, got ${wallet.placed_initial_orders}`
-          )
-        }
+      // Verify expected value
+      if (wallet.placed_initial_orders !== expectedValue) {
+        await transaction.rollback()
+        throw new Error(
+          `Counter mismatch: expected ${expectedValue}, got ${wallet.placed_initial_orders}`
+        )
       }
 
       // Increment counter
@@ -134,7 +111,6 @@ export class WalletService {
 
       await transaction.commit()
 
-      KatanaLogger.info(PREFIX, `Counter incremented: ${expectedValue} → ${expectedValue + 1}`)
       return true
 
     } catch (error) {
@@ -158,8 +134,6 @@ export class WalletService {
       { placed_initial_orders: currentValue - 1 },
       { where: { wallet_address: walletAddress.toLowerCase() } }
     )
-
-    KatanaLogger.info(PREFIX, `Counter decremented: ${currentValue} → ${currentValue - 1}`)
   }
 
   /**

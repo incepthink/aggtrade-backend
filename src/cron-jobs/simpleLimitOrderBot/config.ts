@@ -165,22 +165,14 @@ export const TEST_MODE_CONFIG = {
  * For wallets that need to restart their strategy fresh
  * Ignores orders placed before the cutoff date (does not modify DB)
  *
- * The cutoff date is set to the service startup time, so restarting
- * the service will automatically restart the strategy for these wallets
- *
- * TIMEZONE HANDLING:
- * - cutoffDate uses Date object which represents an absolute moment in time
- * - MySQL stores timestamps in UTC
- * - Sequelize automatically converts between timezones when comparing
- * - This works regardless of EC2 system timezone vs local machine timezone
+ * CURRENTLY DISABLED - No wallets will restart automatically
+ * This config is kept for backward compatibility
  */
 export const STRATEGY_RESTART_CONFIG = {
-  // Wallet indices that should restart (1-19)
-  restartWallets: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+  // Wallet indices that should restart (empty - no wallets)
+  restartWallets: [] as number[],
 
-  // Cutoff timestamp - set to service startup time (NOW)
-  // All orders placed BEFORE this service restart will be ignored for restart wallets
-  // Using Date object which represents absolute moment in time (timezone-agnostic internally)
+  // Cutoff timestamp - kept for backward compatibility
   cutoffDate: new Date(),
 
   // Helper function to check if a wallet should filter old orders
@@ -188,14 +180,3 @@ export const STRATEGY_RESTART_CONFIG = {
     return this.restartWallets.includes(walletIndex)
   }
 }
-
-// Log the restart configuration at startup
-console.log('\n' + '='.repeat(70))
-console.log('🔄 STRATEGY RESTART CONFIGURATION')
-console.log('='.repeat(70))
-console.log(`Restart wallets: ${STRATEGY_RESTART_CONFIG.restartWallets.join(', ')}`)
-console.log(`Cutoff date (UTC): ${STRATEGY_RESTART_CONFIG.cutoffDate.toISOString()}`)
-console.log(`Cutoff date (Local): ${STRATEGY_RESTART_CONFIG.cutoffDate.toString()}`)
-console.log(`Cutoff timestamp (ms): ${STRATEGY_RESTART_CONFIG.cutoffDate.getTime()}`)
-console.log(`All orders placed BEFORE this time will be IGNORED for restart wallets`)
-console.log('='.repeat(70) + '\n')

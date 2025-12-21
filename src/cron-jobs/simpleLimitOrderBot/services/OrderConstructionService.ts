@@ -39,11 +39,6 @@ export class OrderConstructionService {
     expiryHours: number,
     gridOffset?: number
   ): Promise<ConstructedOrder> {
-    KatanaLogger.info(
-      PREFIX,
-      `Constructing ${orderType}: ${amount} ${fromToken.symbol} → ${toToken.symbol} @ $${limitPrice.toFixed(2)}`
-    )
-
     // Calculate amounts in wei
     const fromAmountWei = toWei(amount, fromToken.decimals)
     const toAmountWei = calculateOutputAmount(
@@ -55,8 +50,6 @@ export class OrderConstructionService {
     const toAmountMin = calculateMinAmountOut(toAmountWei, 0.1) // 0.1% slippage
     const deadline = calculateDeadline(expiryHours)
 
-    KatanaLogger.info(PREFIX, `Wei amounts: from=${fromAmountWei}, to_min=${toAmountMin}`)
-
     // Validate balance
     const { balance, balanceHuman } = await BalanceService.getBalance(
       provider,
@@ -65,8 +58,6 @@ export class OrderConstructionService {
       fromToken.isNative,
       fromToken.decimals
     )
-
-    KatanaLogger.info(PREFIX, `Balance: ${balanceHuman} ${fromToken.symbol}`)
 
     if (balance < BigInt(fromAmountWei)) {
       throw new Error(
@@ -84,8 +75,6 @@ export class OrderConstructionService {
       fillDelay: { unit: 'Minutes', value: 3 },
       deadline: deadline
     })
-
-    KatanaLogger.info(PREFIX, 'Order constructed and validated')
 
     return {
       orderType,
@@ -116,8 +105,6 @@ export class OrderConstructionService {
     expiryHours: number,
     minOrderSizeUsd: number
   ): Promise<{ buyOrder: ConstructedOrder; sellOrder: ConstructedOrder }> {
-    KatanaLogger.info(PREFIX, `Constructing pair: BUY ${buyOffset}%, SELL ${sellOffset}%`)
-
     // Get balances
     const { balanceHuman: baseBalance } = await BalanceService.getBalance(
       provider,
@@ -184,8 +171,6 @@ export class OrderConstructionService {
       expiryHours,
       sellOffset
     )
-
-    KatanaLogger.info(PREFIX, 'Order pair constructed successfully')
 
     return { buyOrder, sellOrder }
   }

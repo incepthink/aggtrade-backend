@@ -8,8 +8,8 @@ import { TwapService, type TwapOrder } from '../../../services/twap'
 import { getToken } from '../../gridBot/tokenPairs.config'
 import { toWei, fromWei } from '../../utils/botHelpers'
 import { KatanaLogger } from '../../../utils/logger'
-import { TEST_MODE_CONFIG, STRATEGY_RESTART_CONFIG } from '../config'
-import { Op } from 'sequelize'
+import { TEST_MODE_CONFIG } from '../config'
+import { DatabaseLogger } from '../../../utils/logging/DatabaseLogger'
 
 const PREFIX = '[OrderStatus]'
 
@@ -56,23 +56,10 @@ export class OrderStatusService {
     walletAddress: string,
     walletIndex: number
   ): Promise<OrderStatusUpdate[]> {
-    KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Polling order status...`)
-
     // Build query conditions
     const whereConditions: any = {
       wallet_address: walletAddress.toLowerCase(),
       status: ['pending', 'partial']
-    }
-
-    // If this wallet needs to restart strategy, filter out old orders
-    if (STRATEGY_RESTART_CONFIG.shouldFilterOldOrders(walletIndex)) {
-      whereConditions.placed_at = {
-        [Op.gte]: STRATEGY_RESTART_CONFIG.cutoffDate
-      }
-      KatanaLogger.info(
-        PREFIX,
-        `[Wallet ${walletIndex}] ♻️  Strategy restart active - ignoring orders placed before ${STRATEGY_RESTART_CONFIG.cutoffDate.toISOString()}`
-      )
     }
 
     const dbOrders = await BotOrdersSimple.findAll({
@@ -81,11 +68,8 @@ export class OrderStatusService {
     })
 
     if (dbOrders.length === 0) {
-      KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] No pending orders`)
       return []
     }
-
-    KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Found ${dbOrders.length} active orders`)
 
     if (TEST_MODE_CONFIG.enabled) {
       return this.pollOrderStatusTestMode(dbOrders, walletAddress, walletIndex)
@@ -104,19 +88,14 @@ export class OrderStatusService {
   ): Promise<OrderStatusUpdate[]> {
     const updates: OrderStatusUpdate[] = []
 
-    // Fetch blockchain orders
+    // Fetch blockchain orders (silent mode)
     let blockchainOrders: any
     try {
-      blockchainOrders = await TwapService.fetchLimitOrders(walletAddress)
+      blockchainOrders = await TwapService.fetchLimitOrders(walletAddress, true)
     } catch (error) {
       KatanaLogger.error(PREFIX, `[Wallet ${walletIndex}] Failed to fetch blockchain orders`, error)
       return updates
     }
-
-    KatanaLogger.info(
-      PREFIX,
-      `[Wallet ${walletIndex}] Blockchain: ${blockchainOrders.OPEN.length} OPEN, ${blockchainOrders.COMPLETED.length} COMPLETED`
-    )
 
     // Match and detect changes
     for (const dbOrder of dbOrders) {
@@ -126,21 +105,12 @@ export class OrderStatusService {
         )
 
         if (!blockchainOrder) {
-          KatanaLogger.warn(
-            PREFIX,
-            `[Wallet ${walletIndex}] Blockchain order not found for DB order ${dbOrder.id}`
-          )
           continue
         }
 
         const newStatus = this.mapBlockchainStatus(blockchainOrder.status, blockchainOrder.progress)
 
         if (newStatus !== dbOrder.status || blockchainOrder.progress !== parseFloat(String(dbOrder.progress))) {
-          KatanaLogger.info(
-            PREFIX,
-            `[Wallet ${walletIndex}] Status change: ${dbOrder.order_type} ${dbOrder.status}(${dbOrder.progress}%) -> ${newStatus}(${blockchainOrder.progress}%)`
-          )
-
           updates.push({
             dbOrder,
             blockchainOrder,
@@ -154,8 +124,6 @@ export class OrderStatusService {
       }
     }
 
-    KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Poll complete: ${updates.length} changes`)
-
     return updates
   }
 
@@ -167,21 +135,13 @@ export class OrderStatusService {
     walletAddress: string,
     walletIndex: number
   ): Promise<OrderStatusUpdate[]> {
-    KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] [TEST MODE] Simulating status updates...`)
-
-    // Fetch blockchain orders
+    // Fetch blockchain orders (silent mode)
     let blockchainOrders: any
     try {
-      blockchainOrders = await TwapService.fetchLimitOrders(walletAddress)
+      blockchainOrders = await TwapService.fetchLimitOrders(walletAddress, true)
     } catch (error) {
-      KatanaLogger.error(PREFIX, `[Wallet ${walletIndex}] [TEST MODE] Failed to fetch blockchain orders`, error)
       return []
     }
-
-    KatanaLogger.info(
-      PREFIX,
-      `[Wallet ${walletIndex}] [TEST MODE] Blockchain: ${blockchainOrders.OPEN.length} OPEN, ${blockchainOrders.COMPLETED.length} COMPLETED`
-    )
 
     const updates: OrderStatusUpdate[] = []
 
@@ -205,11 +165,6 @@ export class OrderStatusService {
           dstAmount: filledDstAmount
         }
 
-        KatanaLogger.info(
-          PREFIX,
-          `[Wallet ${walletIndex}] [TEST MODE] Simulated fill: ${dbOrder.order_type} order ${dbOrder.id}`
-        )
-
         updates.push({
           dbOrder,
           blockchainOrder: simulatedBlockchainOrder,
@@ -220,7 +175,9 @@ export class OrderStatusService {
       }
     }
 
-    KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] [TEST MODE] Simulated ${updates.length} fills`)
+    if (updates.length > 0) {
+      KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] [TEST MODE] Simulated ${updates.length} fills`)
+    }
 
     return updates
   }
@@ -228,7 +185,7 @@ export class OrderStatusService {
   /**
    * Update order status in database
    */
-  static async updateOrderStatus(update: OrderStatusUpdate): Promise<void> {
+  static async updateOrderStatus(update: OrderStatusUpdate, walletIndex: number): Promise<void> {
     const { dbOrder, blockchainOrder, newStatus, progress } = update
 
     const updateData: any = {
@@ -246,16 +203,18 @@ export class OrderStatusService {
       updateData.from_amount = fromWei(blockchainOrder.filledSrcAmount, fromToken.decimals)
       updateData.to_amount = fromWei(blockchainOrder.filledDstAmount, toToken.decimals)
 
-      KatanaLogger.info(
-        PREFIX,
-        `Filled: ${updateData.from_amount} ${dbOrder.from_token} → ${updateData.to_amount} ${dbOrder.to_token}`
+      // Record filled order metric
+      const usdValue = parseFloat(dbOrder.usd_value || '0')
+      await DatabaseLogger.recordMetric(
+        walletIndex,
+        dbOrder.wallet_address,
+        'order_filled',
+        usdValue
       )
     }
 
     await BotOrdersSimple.update(updateData, {
       where: { id: dbOrder.id }
     })
-
-    KatanaLogger.info(PREFIX, `Updated order ${dbOrder.id}: ${newStatus} (${progress}%)`)
   }
 }

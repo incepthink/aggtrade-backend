@@ -12,10 +12,11 @@ import { ethers } from 'ethers'
 import { KatanaLogger } from '../../utils/logger'
 import { placeInitialOrders } from './placeInitialOrders'
 import { checkCounterOrders } from './checkCounterOrders'
-import { BOT_CONFIG, TEST_MODE_CONFIG, RATE_LIMIT_CONFIG, STRATEGY_RESTART_CONFIG } from './config'
+import { BOT_CONFIG, TEST_MODE_CONFIG, RATE_LIMIT_CONFIG } from './config'
 import { WalletService } from './services/WalletService'
 import { BalanceService } from './services/BalanceService'
 import { TOKEN_COLUMN_MAPPING } from '../utils/botBalanceUpdater'
+import { DatabaseLogger } from '../../utils/logging/DatabaseLogger'
 
 const PREFIX = '[SimpleLimitOrderBot]'
 
@@ -29,67 +30,42 @@ async function processWallet(
   wallet: any,
   botWalletRecord: any,
   walletNum: number,
-  totalWallets: number
+  totalWallets: number,
+  walletStartTime: number
 ): Promise<void> {
-  KatanaLogger.info(PREFIX, `\n${'='.repeat(70)}`)
-  KatanaLogger.info(PREFIX, `Processing Wallet ${walletNum}/${totalWallets}: ${wallet.address}`)
-  KatanaLogger.info(PREFIX, `Wallet Index: ${wallet.index}`)
-  KatanaLogger.info(PREFIX, `${'='.repeat(70)}`)
+  KatanaLogger.info(PREFIX, `Processing Wallet ${walletNum}/${totalWallets}: ${wallet.address.slice(0, 10)}...`)
 
   try {
     // Sync wallet balances
-    KatanaLogger.info(PREFIX, `[${walletNum}/${totalWallets}] Syncing wallet balances...`)
-    await BalanceService.syncBalances(wallet.signer.provider!, wallet.address)
-
-    // Check if this wallet needs strategy restart
-    let placedInitialOrders = botWalletRecord.placed_initial_orders
-    if (STRATEGY_RESTART_CONFIG.shouldFilterOldOrders(wallet.index)) {
-      KatanaLogger.info(
-        PREFIX,
-        `[${walletNum}/${totalWallets}] ♻️  Strategy restart active - resetting placed_initial_orders from ${placedInitialOrders} to 0`
-      )
-      placedInitialOrders = 0
-      // Override the record so placeInitialOrders sees 0
-      botWalletRecord.placed_initial_orders = 0
-    }
-
-    KatanaLogger.info(PREFIX, `[${walletNum}/${totalWallets}] Initial orders placed: ${placedInitialOrders}`)
+    await BalanceService.syncBalances(wallet.signer.provider!, wallet.address, wallet.index)
 
     // Always attempt to place orders - placeInitialOrders will determine if balance allows more
-    if (true) {
-      // Place remaining initial order pairs
-      KatanaLogger.info(PREFIX, `[${walletNum}/${totalWallets}] Placing initial order pairs...`)
-      await placeInitialOrders(wallet, botWalletRecord)
+    await placeInitialOrders(wallet, botWalletRecord)
 
-      // After attempting to place initial orders, refresh the record
-      const updatedRecord = await WalletService.getWalletRecord(wallet.address)
-      if (updatedRecord) {
-        // For restart wallets, continue to ignore the DB counter
-        if (STRATEGY_RESTART_CONFIG.shouldFilterOldOrders(wallet.index)) {
-          // Don't update from DB - keep using the overridden value
-          KatanaLogger.info(
-            PREFIX,
-            `[${walletNum}/${totalWallets}] Strategy restart: ignoring DB counter (${updatedRecord.placed_initial_orders})`
-          )
-        } else {
-          botWalletRecord.placed_initial_orders = updatedRecord.placed_initial_orders
-        }
-      }
+    // After attempting to place initial orders, refresh the record
+    const updatedRecord = await WalletService.getWalletRecord(wallet.address)
+    if (updatedRecord) {
+      botWalletRecord.placed_initial_orders = updatedRecord.placed_initial_orders
     }
 
-    // Always check for counter-orders if we have any placed pairs
-    // This ensures that even if not all 5 pairs are complete,
-    // we can still place counter orders for filled orders from complete pairs
-    // For restart wallets, always check counter orders regardless of DB counter
-    const shouldCheckCounterOrders = STRATEGY_RESTART_CONFIG.shouldFilterOldOrders(wallet.index) || botWalletRecord.placed_initial_orders > 0
-    if (shouldCheckCounterOrders) {
-      KatanaLogger.info(PREFIX, `[${walletNum}/${totalWallets}] Checking order status and placing counter-orders...`)
+    // Check for counter-orders if we have any placed pairs
+    if (botWalletRecord.placed_initial_orders > 0) {
       await checkCounterOrders(wallet, botWalletRecord)
     }
 
-    KatanaLogger.info(PREFIX, `[${walletNum}/${totalWallets}] Wallet ${wallet.index} processed successfully`)
+    // Record successful cycle metrics
+    const cycleTime = Date.now() - walletStartTime
+    await DatabaseLogger.recordMetric(wallet.index, wallet.address, 'cycle_time', cycleTime)
 
-  } catch (error) {
+  } catch (error: any) {
+    // Log error to database
+    await DatabaseLogger.logError(
+      wallet.index,
+      wallet.address,
+      'wallet_processing_failed',
+      error.message,
+      'processWallet'
+    )
     KatanaLogger.error(PREFIX, `[${walletNum}/${totalWallets}] Failed to process wallet ${wallet.index}`, error)
     // Continue with next wallet even if this one fails
   }
@@ -176,7 +152,7 @@ export async function runSimpleLimitOrderBot(): Promise<void> {
         wallet.tradingPool = botWalletRecord.trading_pool
 
         // Process this wallet
-        await processWallet(wallet, botWalletRecord, walletNum, totalWallets)
+        await processWallet(wallet, botWalletRecord, walletNum, totalWallets, walletStartTime)
 
         const walletDuration = ((Date.now() - walletStartTime) / 1000).toFixed(2)
         KatanaLogger.info(PREFIX, `[${walletNum}/${totalWallets}] ✅ Completed in ${walletDuration}s`)

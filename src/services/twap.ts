@@ -162,8 +162,6 @@ export class TwapService {
       fillDelay,
     } = params
 
-    console.log('[TWAP Service] Preparing limit order:', params)
-
     // Use token addresses exactly as provided by frontend
     const srcTokenAddress = srcToken
     const dstTokenAddress = dstToken
@@ -173,17 +171,6 @@ export class TwapService {
 
     // Convert fill delay to SDK format
     const sdkFillDelay = this.convertFillDelayToSDK(fillDelay)
-
-    console.log('[TWAP Service] Normalized tokens:', {
-      original_src: srcToken,
-      original_dst: dstToken,
-      normalized_src: srcTokenAddress,
-      normalized_dst: dstTokenAddress
-    })
-    // console.log('[TWAP Service] SDK fill delay:', sdkFillDelay)
-
-    const fillDelayInSeconds = this.convertFillDelayToSeconds(fillDelay)
-    console.log('[TWAP Service] Fill delay in seconds:', sdkFillDelay)
 
     // Call SDK to generate order parameters
     const sdkParams = this.sdk.getAskParams({
@@ -195,20 +182,6 @@ export class TwapService {
       deadline: deadline,
       fillDelay: sdkFillDelay,
     }) as any
-
-    console.log('[TWAP Service] SDK generated params:', sdkParams)
-    console.log('[TWAP Service] SDK params breakdown:', {
-      exchange: sdkParams[0],
-      srcToken: sdkParams[1],
-      dstToken: sdkParams[2],
-      srcAmount: sdkParams[3],
-      srcBidAmount: sdkParams[4],
-      dstMinAmount: sdkParams[5],
-      deadline: sdkParams[6],
-      bidDelay: sdkParams[7],
-      fillDelay: sdkParams[8],
-      data: sdkParams[9]
-    })
 
     // Encode transaction data - map SDK params array to ABI tuple structure
     // SDK returns: [exchange, srcToken, dstToken, srcAmount, srcBidAmount, dstMinAmount, deadline, bidDelay, fillDelay, data]
@@ -237,8 +210,6 @@ export class TwapService {
       data: encodedData,
       value: txValue
     }
-
-    console.log('[TWAP Service] Transaction prepared:', transaction)
 
     return transaction
   }
@@ -271,18 +242,14 @@ export class TwapService {
    * 3. Group orders by status (ALL, OPEN, COMPLETED, CANCELED, EXPIRED)
    *
    * @param walletAddress - The wallet address to fetch orders for (0x...)
+   * @param silent - If true, suppress logging
    * @returns Grouped orders by status
    */
-  static async fetchLimitOrders(walletAddress: string): Promise<GroupedOrders> {
-    console.log('🔍 Fetching limit orders for wallet:', walletAddress)
-
+  static async fetchLimitOrders(walletAddress: string, silent: boolean = false): Promise<GroupedOrders> {
     // Fetch orders from blockchain
-    console.log('📡 Fetching orders from blockchain...')
     const rawOrders = await this.sdk.getOrders(walletAddress)
-    console.log(`✅ Found ${rawOrders.length} orders`)
 
     // Enhance orders with metadata
-    console.log('🔧 Processing orders...')
     const orders: TwapOrder[] = rawOrders.map((order) => {
       const fillDelayMs = this.calculateFillDelayMs(order)
       const progress = order.status === OrderStatus.Completed ? 100 : order.progress
@@ -303,13 +270,6 @@ export class TwapService {
       CANCELED: this.filterAndSortOrders(orders, OrderStatus.Canceled),
       EXPIRED: this.filterAndSortOrders(orders, OrderStatus.Expired),
     }
-
-    console.log('📊 Order Summary:')
-    console.log(`  Total Orders: ${groupedOrders.ALL.length}`)
-    console.log(`  Open: ${groupedOrders.OPEN.length}`)
-    console.log(`  Completed: ${groupedOrders.COMPLETED.length}`)
-    console.log(`  Canceled: ${groupedOrders.CANCELED.length}`)
-    console.log(`  Expired: ${groupedOrders.EXPIRED.length}`)
 
     return groupedOrders
   }

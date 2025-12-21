@@ -155,18 +155,9 @@ export async function updateWalletBalances(
       updates[columnName] = result.balance
     }
 
-    // Step 4: Update database
+    // Step 4: Update database (silent)
     if (Object.keys(updates).length > 0) {
       await BotWallet.updateMultipleBalances(walletAddress, updates)
-
-      // Format balances as "TOKEN1: 1.23, TOKEN2: 4.56"
-      const balancesSummary = Object.entries(updates)
-        .map(([col, bal]) => `${col.toUpperCase()}: ${bal}`)
-        .join(', ')
-
-      KatanaLogger.info(PREFIX, `✅ Updated ${Object.keys(updates).length} balances for ${walletAddress.slice(0, 8)}... | ${balancesSummary}`)
-    } else {
-      KatanaLogger.warn(PREFIX, 'No balances to update')
     }
 
   } catch (error) {
@@ -215,16 +206,9 @@ export async function updateSpecificTokenBalances(
       }
     }
 
-    // Update database
+    // Update database (silent)
     if (Object.keys(updates).length > 0) {
       await BotWallet.updateMultipleBalances(walletAddress, updates)
-
-      // Format balances as "TOKEN1: 1.23, TOKEN2: 4.56"
-      const balancesSummary = Object.entries(updates)
-        .map(([col, bal]) => `${col.toUpperCase()}: ${bal}`)
-        .join(', ')
-
-      KatanaLogger.info(PREFIX, `✅ Updated ${Object.keys(updates).length} balances for ${walletAddress.slice(0, 8)}... | ${balancesSummary}`)
     }
 
   } catch (error) {

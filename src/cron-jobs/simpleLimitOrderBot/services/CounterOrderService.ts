@@ -15,6 +15,7 @@ import { OrderStatusUpdate } from './OrderStatusService'
 import { OrderConstructionService } from './OrderConstructionService'
 import { OrderExecutionService } from './OrderExecutionService'
 import { BalanceService } from './BalanceService'
+import { DatabaseLogger } from '../../../utils/logging/DatabaseLogger'
 
 const PREFIX = '[CounterOrder]'
 
@@ -80,12 +81,10 @@ export class CounterOrderService {
   ): Promise<void> {
     const { dbOrder, blockchainOrder } = update
 
-    KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Adding to activity log...`)
-
     try {
       // Sync balances with retry
       await this.retryOperation(
-        () => BalanceService.syncBalances(provider, walletAddress),
+        () => BalanceService.syncBalances(provider, walletAddress, walletIndex),
         'Balance sync'
       )
 
@@ -100,9 +99,9 @@ export class CounterOrderService {
       const fromAmountHuman = fromWei(blockchainOrder.filledSrcAmount, fromToken.decimals)
       const toAmountHuman = fromWei(blockchainOrder.filledDstAmount, toToken.decimals)
 
-      // Calculate USD volume
-      const fromTokenPrice = await getCurrentTokenPrice(fromToken.symbol)
-      const toTokenPrice = await getCurrentTokenPrice(toToken.symbol)
+      // Calculate USD volume (silent mode)
+      const fromTokenPrice = await getCurrentTokenPrice(fromToken.symbol, true)
+      const toTokenPrice = await getCurrentTokenPrice(toToken.symbol, true)
 
       const usdVolume = parseFloat(fromAmountHuman) * fromTokenPrice
       const executionPrice = (parseFloat(toAmountHuman) * toTokenPrice) / parseFloat(fromAmountHuman)
@@ -115,10 +114,6 @@ export class CounterOrderService {
       })
 
       if (existingActivity) {
-        KatanaLogger.warn(
-          PREFIX,
-          `[Wallet ${walletIndex}] Activity already exists for order ${dbOrder.blockchain_order_id}, skipping`
-        )
         return
       }
 
@@ -163,8 +158,6 @@ export class CounterOrderService {
         },
         'Activity log creation'
       )
-
-      KatanaLogger.info(PREFIX, `Added to activity log (USD: $${usdVolume.toFixed(2)})`,)
     } catch (error: any) {
       // Log detailed error information
       KatanaLogger.error(PREFIX, `Failed to add to activity log`, error)
@@ -221,11 +214,8 @@ export class CounterOrderService {
     })
 
     if (existingCounterOrder) {
-      KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Counter-order already exists, skipping`)
       return
     }
-
-    KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Placing counter-order for ${dbOrder.order_type}...`)
 
     try {
       // Get tokens
@@ -240,49 +230,30 @@ export class CounterOrderService {
         throw new Error('Invalid filled amounts: one or both are zero')
       }
 
-      // Calculate execution price
-      const fromTokenPrice = await getCurrentTokenPrice(fromToken.symbol)
-      const toTokenPrice = await getCurrentTokenPrice(toToken.symbol)
+      // Calculate execution price (silent mode)
+      const fromTokenPrice = await getCurrentTokenPrice(fromToken.symbol, true)
+      const toTokenPrice = await getCurrentTokenPrice(toToken.symbol, true)
 
       let executionPriceUSD: number
 
       if (isParentBuyOrder) {
         // Parent BUY: bought toToken with fromToken
         executionPriceUSD = (parseFloat(fromAmountHuman) * fromTokenPrice) / parseFloat(toAmountHuman)
-        KatanaLogger.info(
-          PREFIX,
-          `[Wallet ${walletIndex}] Parent BUY: ${fromAmountHuman} ${fromToken.symbol} → ${toAmountHuman} ${toToken.symbol}`
-        )
       } else {
         // Parent SELL: sold fromToken for toToken
         executionPriceUSD = (parseFloat(toAmountHuman) * toTokenPrice) / parseFloat(fromAmountHuman)
-        KatanaLogger.info(
-          PREFIX,
-          `[Wallet ${walletIndex}] Parent SELL: ${fromAmountHuman} ${fromToken.symbol} → ${toAmountHuman} ${toToken.symbol}`
-        )
       }
-
-      KatanaLogger.info(PREFIX, `Execution price: $${executionPriceUSD.toFixed(2)}`)
 
       // Calculate counter-order price
       const counterPrice = isParentBuyOrder
         ? executionPriceUSD * (1 + pairConfig.profitMarginPercent / 100)
         : executionPriceUSD * (1 - pairConfig.profitMarginPercent / 100)
 
-      KatanaLogger.info(
-        PREFIX,
-        `Counter price: $${counterPrice.toFixed(6)} (${isParentBuyOrder ? '+' : '-'}${pairConfig.profitMarginPercent}%)`
-      )
-
       // Validate minimum order value
       const counterAmount = toAmountHuman
       const counterValueUSD = parseFloat(counterAmount) * toTokenPrice
 
       if (counterValueUSD < pairConfig.minOrderSizeUsd) {
-        KatanaLogger.warn(
-          PREFIX,
-          `[Wallet ${walletIndex}] Counter value $${counterValueUSD.toFixed(2)} below minimum, skipping`
-        )
         return
       }
 
@@ -302,11 +273,6 @@ export class CounterOrderService {
         const toPriceAtCounter = isParentBuyOrder ? fromTokenPrice : counterPrice
         limitPrice = toPriceAtCounter / fromPriceAtCounter
       }
-
-      KatanaLogger.info(
-        PREFIX,
-        `Counter: ${counterAmount} ${counterFromToken.symbol} → ${counterToToken.symbol} @ ${limitPrice.toFixed(8)}`
-      )
 
       // Construct counter-order
       const counterOrder = await OrderConstructionService.constructOrder(
@@ -329,9 +295,20 @@ export class CounterOrderService {
       )
 
       // Sync balances after placement
-      await BalanceService.syncBalances(signer.provider!, signer.address)
+      await BalanceService.syncBalances(signer.provider!, signer.address, walletIndex)
 
-      KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Counter-order placed successfully`)
+      // Calculate and record realized PnL
+      const parentUsdValue = parseFloat(dbOrder.usd_value || '0')
+      const realizedPnL = isParentBuyOrder
+        ? counterValueUSD - parentUsdValue  // BUY low, SELL high
+        : parentUsdValue - counterValueUSD  // SELL high, BUY low
+
+      await DatabaseLogger.recordMetric(
+        walletIndex,
+        signer.address,
+        'realized_pnl',
+        realizedPnL
+      )
 
     } catch (error) {
       KatanaLogger.error(PREFIX, `[Wallet ${walletIndex}] Counter-order failed`, error)
