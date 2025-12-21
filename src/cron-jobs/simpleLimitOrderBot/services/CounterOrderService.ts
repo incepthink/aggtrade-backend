@@ -263,16 +263,54 @@ export class CounterOrderService {
         ? executionPriceUSD * (1 + pairConfig.profitMarginPercent / 100)
         : executionPriceUSD * (1 - pairConfig.profitMarginPercent / 100)
 
-      // Validate minimum order value
-      const counterAmount = toAmountHuman
-      const counterValueUSD = parseFloat(counterAmount) * toTokenPrice
+      // Validate minimum order value and check if we can increase it
+      let counterAmount = toAmountHuman
+      let counterValueUSD = parseFloat(counterAmount) * toTokenPrice
 
       if (counterValueUSD < pairConfig.minOrderSizeUsd) {
-        KatanaLogger.warn(
+        // Counter order is below minimum - check if we have enough balance to increase it to $10
+        KatanaLogger.info(
           PREFIX,
-          `[Wallet ${walletIndex}] Counter order too small: $${counterValueUSD.toFixed(2)} < $${pairConfig.minOrderSizeUsd} (min)`
+          `[Wallet ${walletIndex}] Counter order below minimum: $${counterValueUSD.toFixed(2)} < $${pairConfig.minOrderSizeUsd}`
         )
-        return false
+
+        // Get current wallet balance of the token we're selling (toToken)
+        const { balanceHuman: currentBalance } = await BalanceService.getBalance(
+          signer.provider!,
+          toToken.address,
+          signer.address,
+          toToken.isNative || false,
+          toToken.decimals
+        )
+
+        // Calculate total available tokens (filled amount + existing balance)
+        const totalAvailable = parseFloat(counterAmount) + parseFloat(currentBalance)
+        const totalAvailableUSD = totalAvailable * toTokenPrice
+
+        KatanaLogger.info(
+          PREFIX,
+          `[Wallet ${walletIndex}] Balance check: Filled=${counterAmount} ${toToken.symbol} ($${counterValueUSD.toFixed(2)}), Wallet=${currentBalance} ${toToken.symbol} ($${(parseFloat(currentBalance) * toTokenPrice).toFixed(2)}), Total=$${totalAvailableUSD.toFixed(2)}`
+        )
+
+        // Check if total available can meet minimum order size
+        if (totalAvailableUSD >= pairConfig.minOrderSizeUsd) {
+          // We have enough! Increase counter order to minimum size
+          const minAmountNeeded = pairConfig.minOrderSizeUsd / toTokenPrice
+          counterAmount = minAmountNeeded.toFixed(toToken.decimals)
+          counterValueUSD = parseFloat(counterAmount) * toTokenPrice
+
+          KatanaLogger.info(
+            PREFIX,
+            `[Wallet ${walletIndex}] ✅ Sufficient balance found. Increasing counter order to $${counterValueUSD.toFixed(2)} (${counterAmount} ${toToken.symbol})`
+          )
+        } else {
+          // Not enough balance to reach $10 minimum - skip this counter order
+          KatanaLogger.warn(
+            PREFIX,
+            `[Wallet ${walletIndex}] ❌ Insufficient balance to meet $${pairConfig.minOrderSizeUsd} minimum. Skipping counter order.`
+          )
+          return false
+        }
       }
 
       // Determine counter-order tokens (reverse of parent)
