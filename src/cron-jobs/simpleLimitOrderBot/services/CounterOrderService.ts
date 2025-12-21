@@ -189,6 +189,7 @@ export class CounterOrderService {
 
   /**
    * Place counter-order for filled parent order
+   * @returns true if order was placed, false otherwise
    */
   static async placeCounterOrder(
     update: OrderStatusUpdate,
@@ -199,7 +200,7 @@ export class CounterOrderService {
       minOrderSizeUsd: number
       expiryHours: number
     }
-  ): Promise<void> {
+  ): Promise<boolean> {
     const { dbOrder, blockchainOrder } = update
 
     // Check if counter-order already exists
@@ -214,10 +215,19 @@ export class CounterOrderService {
     })
 
     if (existingCounterOrder) {
-      return
+      KatanaLogger.info(
+        PREFIX,
+        `[Wallet ${walletIndex}] Counter order already exists for parent order ${dbOrder.id}`
+      )
+      return false
     }
 
     try {
+      KatanaLogger.info(
+        PREFIX,
+        `[Wallet ${walletIndex}] Starting counter order placement for parent order ${dbOrder.id} (${dbOrder.from_token}/${dbOrder.to_token})`
+      )
+
       // Get tokens
       const fromToken = getToken(dbOrder.from_token)
       const toToken = getToken(dbOrder.to_token)
@@ -227,7 +237,11 @@ export class CounterOrderService {
       const toAmountHuman = fromWei(blockchainOrder.filledDstAmount, toToken.decimals)
 
       if (parseFloat(fromAmountHuman) === 0 || parseFloat(toAmountHuman) === 0) {
-        throw new Error('Invalid filled amounts: one or both are zero')
+        KatanaLogger.error(
+          PREFIX,
+          `[Wallet ${walletIndex}] Invalid filled amounts: from=${fromAmountHuman}, to=${toAmountHuman}`
+        )
+        return false
       }
 
       // Calculate execution price (silent mode)
@@ -254,7 +268,11 @@ export class CounterOrderService {
       const counterValueUSD = parseFloat(counterAmount) * toTokenPrice
 
       if (counterValueUSD < pairConfig.minOrderSizeUsd) {
-        return
+        KatanaLogger.warn(
+          PREFIX,
+          `[Wallet ${walletIndex}] Counter order too small: $${counterValueUSD.toFixed(2)} < $${pairConfig.minOrderSizeUsd} (min)`
+        )
+        return false
       }
 
       // Determine counter-order tokens (reverse of parent)
@@ -273,6 +291,11 @@ export class CounterOrderService {
         const toPriceAtCounter = isParentBuyOrder ? fromTokenPrice : counterPrice
         limitPrice = toPriceAtCounter / fromPriceAtCounter
       }
+
+      KatanaLogger.info(
+        PREFIX,
+        `[Wallet ${walletIndex}] Counter order details: ${counterAmount} ${counterFromToken.symbol} → ${counterToToken.symbol}, Value: $${counterValueUSD.toFixed(2)}`
+      )
 
       // Construct counter-order
       const counterOrder = await OrderConstructionService.constructOrder(
@@ -310,9 +333,11 @@ export class CounterOrderService {
         realizedPnL
       )
 
+      return true
+
     } catch (error) {
-      KatanaLogger.error(PREFIX, `[Wallet ${walletIndex}] Counter-order failed`, error)
-      // Don't throw - continue with other orders
+      KatanaLogger.error(PREFIX, `[Wallet ${walletIndex}] Counter-order failed for parent order ${dbOrder.id}`, error)
+      return false
     }
   }
 }

@@ -86,7 +86,7 @@ async function verifyAndPlaceMissingCounterOrders(
           }
 
           // Place the missing counter order
-          await CounterOrderService.placeCounterOrder(
+          const success = await CounterOrderService.placeCounterOrder(
             mockUpdate,
             wallet.signer,
             wallet.index,
@@ -97,7 +97,9 @@ async function verifyAndPlaceMissingCounterOrders(
             }
           )
 
-          placedCount++
+          if (success) {
+            placedCount++
+          }
 
           // Small delay between placements to avoid rate limiting
           await new Promise(resolve => setTimeout(resolve, 1000))
@@ -116,12 +118,17 @@ async function verifyAndPlaceMissingCounterOrders(
       if (placedCount === missingCount) {
         KatanaLogger.info(
           PREFIX,
-          `[Wallet ${wallet.index}] Placed ${placedCount} missing counter order(s)`
+          `[Wallet ${wallet.index}] ✅ Successfully placed ${placedCount} missing counter order(s)`
+        )
+      } else if (placedCount > 0) {
+        KatanaLogger.warn(
+          PREFIX,
+          `[Wallet ${wallet.index}] ⚠️ Only placed ${placedCount}/${missingCount} missing counter orders (${missingCount - placedCount} failed or skipped)`
         )
       } else {
         KatanaLogger.error(
           PREFIX,
-          `[Wallet ${wallet.index}] Only placed ${placedCount}/${missingCount} missing counter orders`
+          `[Wallet ${wallet.index}] ❌ Failed to place any counter orders (0/${missingCount} placed)`
         )
       }
     }
@@ -164,8 +171,8 @@ export async function checkCounterOrders(
               wallet.index
             )
 
-            // Place counter order
-            await CounterOrderService.placeCounterOrder(
+            // Place counter order (return value indicates success)
+            const success = await CounterOrderService.placeCounterOrder(
               update,
               wallet.signer,
               wallet.index,
@@ -175,6 +182,13 @@ export async function checkCounterOrders(
                 expiryHours: pairConfig.EXPIRY_HOURS
               }
             )
+
+            if (!success) {
+              KatanaLogger.warn(
+                PREFIX,
+                `[Wallet ${wallet.index}] Failed to place counter order for filled order ${update.dbOrder.id}`
+              )
+            }
           }
         } catch (error) {
           KatanaLogger.error(
