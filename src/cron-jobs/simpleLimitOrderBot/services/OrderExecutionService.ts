@@ -42,6 +42,12 @@ export class OrderExecutionService {
     walletIndex: number
   ): Promise<void> {
     try {
+      // Log order placement initiation
+      KatanaLogger.info(
+        PREFIX,
+        `[Wallet ${walletIndex}] Placing ${order.orderType}: ${order.fromAmount} ${order.fromToken.symbol} → ${order.toToken.symbol}`
+      )
+
       // Step 1: Approve token if needed
       if (!order.fromToken.isNative) {
         const approvalResult = await ensureTokenApproval(
@@ -56,8 +62,20 @@ export class OrderExecutionService {
       // Step 2: Send transaction
       const txResponse = await signer.sendTransaction(order.transaction)
 
+      // Log transaction hash immediately
+      KatanaLogger.info(
+        PREFIX,
+        `[Wallet ${walletIndex}] Transaction sent - Hash: ${txResponse.hash}`
+      )
+
       // Step 3: Wait for confirmation
       const receipt = await txResponse.wait()
+
+      // Log blockchain confirmation
+      KatanaLogger.info(
+        PREFIX,
+        `[Wallet ${walletIndex}] ✅ Transaction confirmed on blockchain - Block: ${receipt?.blockNumber}, Status: ${receipt?.status === 1 ? 'Success' : 'Failed'}`
+      )
 
       // Step 4: Wait for indexing
       await new Promise(resolve => setTimeout(resolve, 5000))
@@ -76,6 +94,12 @@ export class OrderExecutionService {
         order,
         null,
         true // silent mode
+      )
+
+      // Log final success with order ID
+      KatanaLogger.info(
+        PREFIX,
+        `[Wallet ${walletIndex}] ✅ Order saved to database - Order ID: ${blockchainOrderId}`
       )
 
       // Record success metric
@@ -217,6 +241,12 @@ export class OrderExecutionService {
     walletIndex: number
   ): Promise<void> {
     try {
+      // Log order placement initiation
+      KatanaLogger.info(
+        PREFIX,
+        `[Wallet ${walletIndex}] Placing ${order.orderType}: ${order.fromAmount} ${order.fromToken.symbol} → ${order.toToken.symbol} (Parent Order: ${parentOrderId})`
+      )
+
       // Approve token if needed
       if (!order.fromToken.isNative) {
         await ensureTokenApproval(
@@ -231,7 +261,21 @@ export class OrderExecutionService {
       // Send transaction
       const txResponse = await signer.sendTransaction(order.transaction)
 
-      await txResponse.wait()
+      // Log transaction hash immediately
+      KatanaLogger.info(
+        PREFIX,
+        `[Wallet ${walletIndex}] Transaction sent - Hash: ${txResponse.hash}`
+      )
+
+      // Wait for confirmation
+      const receipt = await txResponse.wait()
+
+      // Log blockchain confirmation
+      KatanaLogger.info(
+        PREFIX,
+        `[Wallet ${walletIndex}] ✅ Transaction confirmed on blockchain - Block: ${receipt?.blockNumber}, Status: ${receipt?.status === 1 ? 'Success' : 'Failed'}`
+      )
+
       await new Promise(resolve => setTimeout(resolve, 5000))
 
       const blockchainOrderId = await this.fetchBlockchainOrderId(
@@ -241,6 +285,12 @@ export class OrderExecutionService {
       )
 
       await this.saveOrderToDatabase(signer.address, blockchainOrderId, order, parentOrderId, true)
+
+      // Log final success with order ID
+      KatanaLogger.info(
+        PREFIX,
+        `[Wallet ${walletIndex}] ✅ Order saved to database - Order ID: ${blockchainOrderId}`
+      )
 
       // Record success metric
       await DatabaseLogger.recordMetric(walletIndex, signer.address, `order_placed_${order.orderType}`)
