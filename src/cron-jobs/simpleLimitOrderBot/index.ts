@@ -326,6 +326,17 @@ export async function runSimpleLimitOrderBot(): Promise<void> {
       // Step 2: Reset strategy (cancel orders, reset counters)
       await resetStrategyForAllWallets(botWallets)
 
+      // Step 3: Reload wallet records to get updated counters (placed_initial_orders = 0)
+      KatanaLogger.info(PREFIX, 'Reloading wallet records after reset...')
+      botWallets = await WalletService.getAllWalletRecords(TEST_MODE_CONFIG.testWalletIndex)
+
+      // Reapply single wallet mode filter if it was enabled
+      if (TEST_MODE_CONFIG.singleWalletMode && TEST_MODE_CONFIG.testWalletIndex === null) {
+        botWallets = [botWallets[0]]
+      }
+
+      KatanaLogger.info(PREFIX, `Reloaded ${botWallets.length} wallet(s) with fresh counters`)
+
       // Normal cycle continues below - will place fresh initial orders
       KatanaLogger.info(PREFIX, 'Reset complete. Proceeding with normal cycle to place fresh initial orders...\n')
     }
