@@ -260,7 +260,31 @@ export class RebalancingService {
     walletIndex: number
   ): Promise<string> {
     try {
-      // Check if token approval needed (for ERC20 tokens)
+      // Step 1: Verify sufficient balance before proceeding
+      KatanaLogger.info(PREFIX, 'Verifying token balance before swap...')
+
+      let actualBalance: bigint
+      if (swapDetails.tokenFrom.isNative) {
+        actualBalance = await wallet.signer.provider!.getBalance(wallet.address)
+      } else {
+        const tokenContract = new ethers.Contract(
+          swapDetails.tokenFrom.address,
+          ['function balanceOf(address owner) view returns (uint256)'],
+          wallet.signer
+        )
+        actualBalance = await tokenContract.balanceOf(wallet.address)
+      }
+
+      KatanaLogger.info(PREFIX, `Current ${swapDetails.tokenFrom.symbol} balance: ${actualBalance.toString()}, Required: ${swapDetails.fromAmount.toString()}`)
+
+      if (actualBalance < swapDetails.fromAmount) {
+        throw new Error(
+          `Insufficient ${swapDetails.tokenFrom.symbol} balance: have ${ethers.formatUnits(actualBalance, swapDetails.tokenFrom.decimals)}, need ${swapDetails.fromAmountHuman}`
+        )
+      }
+
+      // Step 2: Check if token approval needed (for ERC20 tokens)
+      let approvalTxHash: string | null = null
       if (!swapDetails.tokenFrom.isNative) {
         KatanaLogger.info(PREFIX, 'Checking token approval...')
 
@@ -271,6 +295,7 @@ export class RebalancingService {
         )
 
         const allowance = await tokenContract.allowance(wallet.address, swapDetails.swapTx.to)
+        KatanaLogger.info(PREFIX, `Current allowance: ${allowance.toString()}, Required: ${swapDetails.fromAmount.toString()}`)
 
         if (allowance < swapDetails.fromAmount) {
           KatanaLogger.info(PREFIX, 'Approving token spend...')
@@ -284,8 +309,25 @@ export class RebalancingService {
             ethers.MaxUint256,
             { nonce: approvalNonce }
           )
-          await approveTx.wait()
-          KatanaLogger.info(PREFIX, 'Token approved')
+          approvalTxHash = approveTx.hash
+          KatanaLogger.info(PREFIX, `Approval transaction sent: ${approvalTxHash}`)
+
+          const approvalReceipt = await approveTx.wait()
+          KatanaLogger.info(PREFIX, `Token approved in block ${approvalReceipt?.blockNumber}`)
+
+          // CRITICAL: Wait for approval to be fully confirmed before proceeding
+          KatanaLogger.info(PREFIX, `Waiting ${REBALANCE_CONFIG.APPROVAL_CONFIRMATION_DELAY_MS}ms for approval confirmation...`)
+          await new Promise(resolve => setTimeout(resolve, REBALANCE_CONFIG.APPROVAL_CONFIRMATION_DELAY_MS))
+
+          // Verify approval was successful
+          const newAllowance = await tokenContract.allowance(wallet.address, swapDetails.swapTx.to)
+          KatanaLogger.info(PREFIX, `Verified new allowance: ${newAllowance.toString()}`)
+
+          if (newAllowance < swapDetails.fromAmount) {
+            throw new Error(`Approval failed: allowance ${newAllowance.toString()} < required ${swapDetails.fromAmount.toString()}`)
+          }
+        } else {
+          KatanaLogger.info(PREFIX, 'Sufficient allowance already exists, skipping approval')
         }
       }
 
@@ -298,22 +340,60 @@ export class RebalancingService {
       const currentNonce = await wallet.signer.provider!.getTransactionCount(wallet.address, 'pending')
       KatanaLogger.info(PREFIX, `Fetched fresh nonce: ${currentNonce}`)
 
-      // Send swap transaction with explicit nonce
+      // Estimate gas for the swap transaction
+      KatanaLogger.info(PREFIX, 'Estimating gas for swap transaction...')
+      let gasEstimate: bigint
+      try {
+        gasEstimate = await wallet.signer.provider!.estimateGas({
+          from: wallet.address,
+          to: swapDetails.swapTx.to,
+          data: swapDetails.swapTx.data,
+          value: swapDetails.swapTx.value || 0n
+        })
+        // Add 20% buffer to gas estimate for safety
+        const gasLimit = (gasEstimate * 120n) / 100n
+        KatanaLogger.info(PREFIX, `Gas estimate: ${gasEstimate.toString()}, using limit: ${gasLimit.toString()} (+20%)`)
+      } catch (gasError: any) {
+        KatanaLogger.error(PREFIX, 'Gas estimation failed - transaction will likely revert:', gasError)
+
+        // Try to decode the error
+        if (gasError.data) {
+          KatanaLogger.error(PREFIX, `Revert data: ${gasError.data}`)
+        }
+        if (gasError.reason) {
+          KatanaLogger.error(PREFIX, `Revert reason: ${gasError.reason}`)
+        }
+
+        throw new Error(`Gas estimation failed: ${gasError.message || 'Unknown error'}. This usually means the transaction would revert.`)
+      }
+
+      // Send swap transaction with explicit nonce and gas limit
       KatanaLogger.info(PREFIX, 'Sending swap transaction...')
-      KatanaLogger.info(PREFIX, `TX params: to=${swapDetails.swapTx.to}, data length=${swapDetails.swapTx.data.length}, value=${swapDetails.swapTx.value || 0n}, nonce=${currentNonce}`)
+      KatanaLogger.info(PREFIX, `TX params: to=${swapDetails.swapTx.to}, data length=${swapDetails.swapTx.data.length}, value=${swapDetails.swapTx.value || 0n}, nonce=${currentNonce}, gasLimit=${((gasEstimate * 120n) / 100n).toString()}`)
 
       const tx = await wallet.signer.sendTransaction({
         to: swapDetails.swapTx.to,
         data: swapDetails.swapTx.data,
         value: swapDetails.swapTx.value || 0n,
-        nonce: currentNonce
+        nonce: currentNonce,
+        gasLimit: (gasEstimate * 120n) / 100n
       })
 
       KatanaLogger.info(PREFIX, `Transaction sent: ${tx.hash}`)
 
       // Wait for confirmation
       const receipt = await tx.wait()
-      KatanaLogger.info(PREFIX, `Transaction confirmed in block ${receipt?.blockNumber}`)
+
+      if (!receipt) {
+        throw new Error('Transaction receipt is null')
+      }
+
+      if (receipt.status === 0) {
+        KatanaLogger.error(PREFIX, `Transaction reverted! Receipt:`, JSON.stringify(receipt, null, 2))
+        throw new Error(`Transaction reverted in block ${receipt.blockNumber}. Check logs for details.`)
+      }
+
+      KatanaLogger.info(PREFIX, `✅ Transaction confirmed in block ${receipt.blockNumber}, gas used: ${receipt.gasUsed.toString()}`)
 
       // Log to SushiswapActivity table
       await this.logToActivityTable(
@@ -327,6 +407,19 @@ export class RebalancingService {
       return tx.hash
 
     } catch (error: any) {
+      // Enhanced error logging
+      KatanaLogger.error(PREFIX, 'Swap transaction failed:', {
+        errorCode: error.code,
+        errorMessage: error.message,
+        errorData: error.data,
+        errorReason: error.reason,
+        swapDetails: {
+          from: swapDetails.tokenFrom.symbol,
+          to: swapDetails.tokenTo.symbol,
+          amount: swapDetails.fromAmountHuman
+        }
+      })
+
       // Handle nonce errors with retry
       if (error.code === 'NONCE_EXPIRED' || error.message?.includes('nonce too low')) {
         KatanaLogger.warn(PREFIX, 'Nonce error detected, retrying with fresh nonce...')
@@ -339,18 +432,34 @@ export class RebalancingService {
           const retryNonce = await wallet.signer.provider!.getTransactionCount(wallet.address, 'pending')
           KatanaLogger.info(PREFIX, `Retry with nonce: ${retryNonce}`)
 
-          // Retry the transaction with fresh nonce
+          // Re-estimate gas for retry
+          const retryGasEstimate = await wallet.signer.provider!.estimateGas({
+            from: wallet.address,
+            to: swapDetails.swapTx.to,
+            data: swapDetails.swapTx.data,
+            value: swapDetails.swapTx.value || 0n
+          })
+          const retryGasLimit = (retryGasEstimate * 120n) / 100n
+          KatanaLogger.info(PREFIX, `Retry gas limit: ${retryGasLimit.toString()}`)
+
+          // Retry the transaction with fresh nonce and gas limit
           const tx = await wallet.signer.sendTransaction({
             to: swapDetails.swapTx.to,
             data: swapDetails.swapTx.data,
             value: swapDetails.swapTx.value || 0n,
-            nonce: retryNonce
+            nonce: retryNonce,
+            gasLimit: retryGasLimit
           })
 
           KatanaLogger.info(PREFIX, `Retry transaction sent: ${tx.hash}`)
 
           const receipt = await tx.wait()
-          KatanaLogger.info(PREFIX, `Retry transaction confirmed in block ${receipt?.blockNumber}`)
+
+          if (!receipt || receipt.status === 0) {
+            throw new Error(`Retry transaction reverted in block ${receipt?.blockNumber}`)
+          }
+
+          KatanaLogger.info(PREFIX, `✅ Retry transaction confirmed in block ${receipt.blockNumber}`)
 
           await this.logToActivityTable(
             wallet.address,
@@ -367,18 +476,19 @@ export class RebalancingService {
             walletIndex,
             wallet.address,
             'rebalance_swap_retry_failed',
-            retryError.message,
+            `${retryError.message}${retryError.reason ? ` | Reason: ${retryError.reason}` : ''}`,
             'executeRebalanceProduction'
           )
           throw retryError
         }
       }
 
+      // Log the error to database with enhanced details
       await DatabaseLogger.logError(
         walletIndex,
         wallet.address,
         'rebalance_swap_failed',
-        error.message,
+        `${error.message}${error.reason ? ` | Reason: ${error.reason}` : ''}${error.data ? ` | Data: ${error.data}` : ''}`,
         'executeRebalanceProduction'
       )
       throw error

@@ -170,7 +170,8 @@ export const TEST_MODE_CONFIG = {
  */
 export const REBALANCE_CONFIG = {
   ENABLED: true,
-  SLIPPAGE_PERCENT: 0.5,          // 0.5% slippage tolerance
-  MIN_IMBALANCE_PERCENT: 1,       // Only rebalance if >2% off from 50/50
-  MIN_SWAP_SIZE_USD: 5            // Don't swap if amount < $5
+  SLIPPAGE_PERCENT: 2.0,          // 2% slippage tolerance (increased from 0.5% to handle on-chain delays)
+  MIN_IMBALANCE_PERCENT: 1,       // Only rebalance if >1% off from 50/50
+  MIN_SWAP_SIZE_USD: 5,           // Don't swap if amount < $5
+  APPROVAL_CONFIRMATION_DELAY_MS: 3000  // Wait 3s after approval before swap to ensure confirmation
 }
