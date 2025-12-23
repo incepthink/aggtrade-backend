@@ -16,6 +16,7 @@ import { OrderConstructionService } from './OrderConstructionService'
 import { OrderExecutionService } from './OrderExecutionService'
 import { BalanceService } from './BalanceService'
 import { DatabaseLogger } from '../../../utils/logging/DatabaseLogger'
+import { TEST_MODE_CONFIG } from '../config'
 
 const PREFIX = '[CounterOrder]'
 
@@ -218,6 +219,26 @@ export class CounterOrderService {
       KatanaLogger.info(
         PREFIX,
         `[Wallet ${walletIndex}] Counter order already exists for parent order ${dbOrder.id}`
+      )
+      return false
+    }
+
+    // Check if order type matches current bot mode
+    const isTestOrder = dbOrder.blockchain_order_id?.startsWith('TEST_')
+    const isTestMode = TEST_MODE_CONFIG.enabled
+
+    if (isTestOrder && !isTestMode) {
+      KatanaLogger.info(
+        PREFIX,
+        `[Wallet ${walletIndex}] Skipping counter order for test order ${dbOrder.blockchain_order_id} (bot in PRODUCTION mode)`
+      )
+      return false
+    }
+
+    if (!isTestOrder && isTestMode) {
+      KatanaLogger.info(
+        PREFIX,
+        `[Wallet ${walletIndex}] Skipping counter order for real order ${dbOrder.blockchain_order_id} (bot in TEST mode)`
       )
       return false
     }

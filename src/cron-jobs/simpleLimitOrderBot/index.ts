@@ -15,13 +15,187 @@ import { checkCounterOrders } from './checkCounterOrders'
 import { BOT_CONFIG, TEST_MODE_CONFIG, RATE_LIMIT_CONFIG } from './config'
 import { WalletService } from './services/WalletService'
 import { BalanceService } from './services/BalanceService'
+import { RebalancingService } from './services/RebalancingService'
+import { OrderCancellationService } from './services/OrderCancellationService'
 import { TOKEN_COLUMN_MAPPING } from '../utils/botBalanceUpdater'
 import { DatabaseLogger } from '../../utils/logging/DatabaseLogger'
+import BotWallet from '../../models/BotWallet'
 
 const PREFIX = '[SimpleLimitOrderBot]'
 
 // Global lock to prevent concurrent bot runs
 let isRunning = false
+
+/**
+ * Track last midnight reset to prevent multiple triggers
+ */
+let lastMidnightReset: string | null = null
+
+/**
+ * Track first run after startup to trigger initial reset/rebalance
+ */
+let isFirstRun = true
+
+/**
+ * Check if current time is midnight (00:00:00)
+ * Returns true during the midnight hour (00:00 - 00:59)
+ */
+function isMidnightHour(): boolean {
+  const now = new Date()
+  return now.getHours() === 0
+}
+
+/**
+ * Determine if midnight reset should trigger
+ * Prevents multiple triggers on the same day
+ * Supports test mode via FORCE_MIDNIGHT_RESET environment variable
+ */
+function shouldTriggerMidnightReset(): boolean {
+  // TEST MODE: Force trigger if flag is set
+  if (TEST_MODE_CONFIG.forceMidnightReset) {
+    KatanaLogger.info(PREFIX, '[TEST MODE] Forcing midnight reset (FORCE_MIDNIGHT_RESET=true)')
+    return true
+  }
+
+  // PRODUCTION: Check if midnight hour and not already triggered today
+  const today = new Date().toISOString().split('T')[0] // YYYY-MM-DD
+
+  if (isMidnightHour() && lastMidnightReset !== today) {
+    lastMidnightReset = today
+    return true
+  }
+
+  return false
+}
+
+/**
+ * Rebalance all wallets to 50/50 allocation
+ * Called during midnight reset
+ */
+async function rebalanceAllWallets(provider: ethers.Provider, botWallets: any[]): Promise<void> {
+  KatanaLogger.info(PREFIX, '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+  KatanaLogger.info(PREFIX, '   MIDNIGHT RESET: REBALANCING WALLETS')
+  KatanaLogger.info(PREFIX, '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+
+  const results = {
+    total: botWallets.length,
+    rebalanced: 0,
+    skipped: 0,
+    failed: 0
+  }
+
+  for (let i = 0; i < botWallets.length; i++) {
+    const botWalletRecord = botWallets[i]
+    const walletNum = i + 1
+
+    try {
+      const wallet = WalletService.loadWalletWithSigner(botWalletRecord.wallet_index, provider)
+
+      if (!wallet) {
+        KatanaLogger.warn(PREFIX, `[${walletNum}/${botWallets.length}] Skipping wallet ${botWalletRecord.wallet_index} - no private key`)
+        results.skipped++
+        continue
+      }
+
+      wallet.tradingPool = botWalletRecord.trading_pool
+
+      KatanaLogger.info(PREFIX, `[${walletNum}/${botWallets.length}] Rebalancing ${wallet.address.slice(0, 10)}... (${wallet.tradingPool})`)
+
+      const result = await RebalancingService.executeRebalance(
+        wallet,
+        wallet.index,
+        wallet.tradingPool
+      )
+
+      if (result.success) {
+        if (result.swapAmount) {
+          KatanaLogger.info(PREFIX, `[${walletNum}/${botWallets.length}] ✅ Rebalanced: Swapped ${result.swapAmount} ${result.fromToken} → ${result.toToken}`)
+          results.rebalanced++
+        } else {
+          KatanaLogger.info(PREFIX, `[${walletNum}/${botWallets.length}] ✅ Already balanced`)
+          results.skipped++
+        }
+      } else {
+        KatanaLogger.error(PREFIX, `[${walletNum}/${botWallets.length}] ❌ Rebalance failed`)
+        results.failed++
+      }
+
+      // Small delay between wallets
+      if (i + 1 < botWallets.length) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
+
+    } catch (error: any) {
+      KatanaLogger.error(PREFIX, `[${walletNum}/${botWallets.length}] ❌ Error during rebalance`, error)
+      results.failed++
+    }
+  }
+
+  KatanaLogger.info(PREFIX, '\nRebalancing Summary:')
+  KatanaLogger.info(PREFIX, `  Total wallets: ${results.total}`)
+  KatanaLogger.info(PREFIX, `  ✅ Rebalanced: ${results.rebalanced}`)
+  KatanaLogger.info(PREFIX, `  ⏭️  Already balanced: ${results.skipped - results.failed}`)
+  KatanaLogger.info(PREFIX, `  ❌ Failed: ${results.failed}`)
+  KatanaLogger.info(PREFIX, '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
+}
+
+/**
+ * Reset strategy for all wallets
+ * Called after midnight rebalancing to:
+ * 1. Cancel all existing orders
+ * 2. Reset placed_initial_orders counters
+ * 3. Allow normal cycle to place fresh initial orders
+ */
+async function resetStrategyForAllWallets(botWallets: any[]): Promise<void> {
+  KatanaLogger.info(PREFIX, '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+  KatanaLogger.info(PREFIX, '   MIDNIGHT RESET: STRATEGY RESET')
+  KatanaLogger.info(PREFIX, '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+
+  // Step 1: Cancel all existing orders (database-level)
+  KatanaLogger.info(PREFIX, 'Step 1: Canceling all active orders...')
+  const cancellationResult = await OrderCancellationService.cancelAllOrders(botWallets)
+
+  // Step 2: Reset placed_initial_orders counters to 0
+  KatanaLogger.info(PREFIX, '\nStep 2: Resetting placed_initial_orders counters...')
+  const resetResults = { success: 0, failed: 0 }
+
+  for (let i = 0; i < botWallets.length; i++) {
+    const wallet = botWallets[i]
+    const walletNum = i + 1
+
+    try {
+      await BotWallet.update(
+        { placed_initial_orders: 0 },
+        { where: { wallet_address: wallet.wallet_address.toLowerCase() } }
+      )
+      resetResults.success++
+      KatanaLogger.info(PREFIX, `[${walletNum}/${botWallets.length}] ✅ Reset counter for wallet ${wallet.wallet_index}`)
+
+    } catch (error: any) {
+      resetResults.failed++
+      await DatabaseLogger.logError(
+        wallet.wallet_index,
+        wallet.wallet_address,
+        'counter_reset_failed',
+        error.message,
+        'resetStrategyForAllWallets'
+      )
+      KatanaLogger.error(PREFIX, `[${walletNum}/${botWallets.length}] ❌ Failed to reset counter for wallet ${wallet.wallet_index}`, error)
+      // Continue with next wallet
+    }
+  }
+
+  // Step 3: Summary
+  KatanaLogger.info(PREFIX, '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+  KatanaLogger.info(PREFIX, '   RESET SUMMARY')
+  KatanaLogger.info(PREFIX, '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+  KatanaLogger.info(PREFIX, `📋 Orders canceled: ${cancellationResult.canceledCount}/${cancellationResult.totalOrders}`)
+  KatanaLogger.info(PREFIX, `🔄 Counters reset: ${resetResults.success}/${botWallets.length}`)
+  if (resetResults.failed > 0) {
+    KatanaLogger.info(PREFIX, `❌ Failed: ${resetResults.failed}`)
+  }
+  KatanaLogger.info(PREFIX, '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
+}
 
 /**
  * Process a single wallet
@@ -94,22 +268,67 @@ export async function runSimpleLimitOrderBot(): Promise<void> {
   if (TEST_MODE_CONFIG.enabled) {
     KatanaLogger.info(PREFIX, 'TEST MODE: Orders will be simulated, not placed on blockchain')
   }
+  if (TEST_MODE_CONFIG.testWalletIndex !== null) {
+    KatanaLogger.info(PREFIX, `SINGLE WALLET TEST: Processing only wallet ${TEST_MODE_CONFIG.testWalletIndex}`)
+  }
+  if (TEST_MODE_CONFIG.singleWalletMode) {
+    KatanaLogger.info(PREFIX, 'SINGLE WALLET MODE: Processing only the first wallet')
+  }
 
   try {
     // Initialize blockchain provider
     const provider = new ethers.JsonRpcProvider(BOT_CONFIG.RPC_URL)
     KatanaLogger.info(PREFIX, `Connected to RPC: ${BOT_CONFIG.RPC_URL}`)
 
-    // Load all bot wallets from database
+    // Load all bot wallets from database (or single wallet if TEST_WALLET_INDEX is set)
     KatanaLogger.info(PREFIX, 'Loading bot wallets from database...')
-    const botWallets = await WalletService.getAllWalletRecords()
+    let botWallets = await WalletService.getAllWalletRecords(TEST_MODE_CONFIG.testWalletIndex)
 
     if (botWallets.length === 0) {
-      KatanaLogger.warn(PREFIX, 'No bot wallets found in database!')
+      if (TEST_MODE_CONFIG.testWalletIndex !== null) {
+        KatanaLogger.warn(PREFIX, `Wallet ${TEST_MODE_CONFIG.testWalletIndex} not found in database!`)
+      } else {
+        KatanaLogger.warn(PREFIX, 'No bot wallets found in database!')
+      }
       return
     }
 
-    KatanaLogger.info(PREFIX, `Found ${botWallets.length} bot wallets`)
+    // Apply single wallet mode if enabled (takes precedence over all wallets)
+    if (TEST_MODE_CONFIG.singleWalletMode && TEST_MODE_CONFIG.testWalletIndex === null) {
+      const originalCount = botWallets.length
+      botWallets = [botWallets[0]]
+      KatanaLogger.info(PREFIX, `Single wallet mode: Filtered ${originalCount} wallets down to first wallet (index ${botWallets[0].wallet_index})`)
+    }
+
+    if (TEST_MODE_CONFIG.testWalletIndex !== null) {
+      KatanaLogger.info(PREFIX, `Found test wallet ${TEST_MODE_CONFIG.testWalletIndex}: ${botWallets[0].wallet_address}`)
+    } else if (TEST_MODE_CONFIG.singleWalletMode) {
+      KatanaLogger.info(PREFIX, `Single wallet mode active: ${botWallets[0].wallet_address}`)
+    } else {
+      KatanaLogger.info(PREFIX, `Found ${botWallets.length} bot wallets`)
+    }
+
+    // Check if we should trigger reset/rebalance (on first run OR at midnight)
+    const shouldReset = isFirstRun || shouldTriggerMidnightReset()
+
+    if (shouldReset) {
+      // Log why we're resetting
+      if (isFirstRun) {
+        KatanaLogger.info(PREFIX, '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+        KatanaLogger.info(PREFIX, '   STARTUP RESET: First run after restart')
+        KatanaLogger.info(PREFIX, '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+        isFirstRun = false  // Clear flag after first run
+      }
+
+      // Step 1: Rebalance all wallets to 50/50 allocation
+      await rebalanceAllWallets(provider, botWallets)
+
+      // Step 2: Reset strategy (cancel orders, reset counters)
+      await resetStrategyForAllWallets(botWallets)
+
+      // Normal cycle continues below - will place fresh initial orders
+      KatanaLogger.info(PREFIX, 'Reset complete. Proceeding with normal cycle to place fresh initial orders...\n')
+    }
 
     // Process wallets sequentially with delay between each
     const delayMs = RATE_LIMIT_CONFIG.BATCH_DELAY_MS
@@ -229,6 +448,24 @@ export function startSimpleLimitOrderBotCron(): void {
     KatanaLogger.info(PREFIX, 'Starting Simple Limit Order Bot cron job')
     KatanaLogger.info(PREFIX, `Interval: Every ${BOT_CONFIG.CRON_INTERVAL_MINUTES} minutes`)
     KatanaLogger.info(PREFIX, `Processing: Sequential (one wallet at a time), ${RATE_LIMIT_CONFIG.BATCH_DELAY_MS}ms delay between wallets`)
+  }
+
+  if (TEST_MODE_CONFIG.testWalletIndex !== null) {
+    KatanaLogger.info(PREFIX, `🔬 SINGLE WALLET TEST MODE: Only wallet ${TEST_MODE_CONFIG.testWalletIndex} will be processed`)
+  }
+
+  if (TEST_MODE_CONFIG.singleWalletMode) {
+    KatanaLogger.info(PREFIX, '🎯 SINGLE WALLET MODE: Only the first wallet will be processed')
+  }
+
+  if (TEST_MODE_CONFIG.forceMidnightReset) {
+    KatanaLogger.info(PREFIX, '⏰ FORCE MIDNIGHT RESET: Reset and rebalance will trigger on every cycle')
+  }
+
+  KatanaLogger.info(PREFIX, '🔄 STARTUP RESET: Reset and rebalance will trigger on first cycle')
+
+  if (TEST_MODE_CONFIG.orderPairCap !== null) {
+    KatanaLogger.info(PREFIX, `📊 ORDER_PAIR_CAP: Maximum ${TEST_MODE_CONFIG.orderPairCap} pair(s) per wallet`)
   }
 
   const intervalMs = TEST_MODE_CONFIG.enabled

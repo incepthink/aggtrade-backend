@@ -105,7 +105,8 @@ export class BalanceService {
     totalValueUsd: number
   } {
     const balance = parseFloat(tokenBalance)
-    const balanceUsd = balance * tokenPrice
+    // Round to 2 decimal places to avoid floating-point precision issues
+    const balanceUsd = Math.round(balance * tokenPrice * 100) / 100
 
     // Calculate how many pairs we can afford
     const maxPairsAffordable = Math.floor(balanceUsd / minOrderSizeUsd)

@@ -145,8 +145,16 @@ export class WalletService {
 
   /**
    * Get all wallet records from database
+   * If walletIndex is provided, only return that specific wallet
    */
-  static async getAllWalletRecords(): Promise<any[]> {
-    return await BotWallet.getAllWallets()
+  static async getAllWalletRecords(walletIndex?: number | null): Promise<any[]> {
+    const allWallets = await BotWallet.getAllWallets()
+
+    // Filter by wallet index if specified
+    if (walletIndex !== null && walletIndex !== undefined) {
+      return allWallets.filter((wallet: any) => wallet.wallet_index === walletIndex)
+    }
+
+    return allWallets
   }
 }

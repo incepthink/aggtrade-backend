@@ -14,7 +14,8 @@
       "Bash(rm:*)",
       "Bash(npm view:*)",
       "Bash(npm install:*)",
-      "Bash(bun build:*)"
+      "Bash(bun build:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []

@@ -157,26 +157,20 @@ export function getGridConfigForPair(tradingPool: string): {
 export const TEST_MODE_CONFIG = {
   enabled: process.env.BOT_TEST_MODE === 'true',
   intervalSeconds: 10,
-  simulatedOrders: new Map<string, any[]>()
+  simulatedOrders: new Map<string, any[]>(),
+  forceMidnightReset: process.env.FORCE_MIDNIGHT_RESET === 'true',
+  testWalletIndex: process.env.TEST_WALLET_INDEX ? parseInt(process.env.TEST_WALLET_INDEX) : null,
+  singleWalletMode: process.env.SINGLE_WALLET_MODE === 'true',
+  orderPairCap: process.env.ORDER_PAIR_CAP ? parseInt(process.env.ORDER_PAIR_CAP) : null
 }
 
 /**
- * STRATEGY RESTART CONFIG
- * For wallets that need to restart their strategy fresh
- * Ignores orders placed before the cutoff date (does not modify DB)
- *
- * CURRENTLY DISABLED - No wallets will restart automatically
- * This config is kept for backward compatibility
+ * REBALANCING CONFIG
+ * Controls midnight wallet rebalancing to 50/50 allocation
  */
-export const STRATEGY_RESTART_CONFIG = {
-  // Wallet indices that should restart (empty - no wallets)
-  restartWallets: [] as number[],
-
-  // Cutoff timestamp - kept for backward compatibility
-  cutoffDate: new Date(),
-
-  // Helper function to check if a wallet should filter old orders
-  shouldFilterOldOrders(walletIndex: number): boolean {
-    return this.restartWallets.includes(walletIndex)
-  }
+export const REBALANCE_CONFIG = {
+  ENABLED: true,
+  SLIPPAGE_PERCENT: 0.5,          // 0.5% slippage tolerance
+  MIN_IMBALANCE_PERCENT: 1,       // Only rebalance if >2% off from 50/50
+  MIN_SWAP_SIZE_USD: 5            // Don't swap if amount < $5
 }
