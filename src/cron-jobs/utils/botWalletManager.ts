@@ -151,8 +151,16 @@ export async function ensureTokenApproval(
       if (currentAllowance < BigInt(amountWei)) {
         console.log('[Token Approval] Insufficient allowance, approving...')
 
-        // Approve unlimited amount (common pattern for bots)
-        const approvalTx = await tokenContract.approve(spenderAddress, ethers.MaxUint256)
+        // Fetch fresh nonce for approval transaction
+        const currentNonce = await wallet.provider!.getTransactionCount(wallet.address, 'pending')
+        console.log(`[Token Approval] Using nonce: ${currentNonce}`)
+
+        // Approve unlimited amount (common pattern for bots) with explicit nonce
+        const approvalTx = await tokenContract.approve(
+          spenderAddress,
+          ethers.MaxUint256,
+          { nonce: currentNonce }
+        )
         console.log(`[Token Approval] Approval tx hash: ${approvalTx.hash}`)
 
         const receipt = await approvalTx.wait()
@@ -167,15 +175,20 @@ export async function ensureTokenApproval(
     } catch (error: any) {
       lastError = error
 
+      // Check if it's a nonce error that should be retried
+      const isNonceError = error?.code === 'NONCE_EXPIRED' || error?.message?.includes('nonce too low')
+
       // Check if it's a server error that should be retried
-      const shouldRetry =
+      const isServerError =
         error?.code === 'SERVER_ERROR' ||
         error?.message?.includes('500') ||
         error?.message?.includes('Internal Server Error')
 
+      const shouldRetry = isNonceError || isServerError
+
       if (shouldRetry && attempt < maxRetries) {
-        const delay = retryDelayMs * Math.pow(2, attempt - 1) // Exponential backoff
-        console.log(`[Token Approval] RPC error (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`)
+        const delay = isNonceError ? 2000 : retryDelayMs * Math.pow(2, attempt - 1) // Longer delay for nonce errors
+        console.log(`[Token Approval] ${isNonceError ? 'Nonce' : 'RPC'} error (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`)
         await new Promise(resolve => setTimeout(resolve, delay))
         continue
       }

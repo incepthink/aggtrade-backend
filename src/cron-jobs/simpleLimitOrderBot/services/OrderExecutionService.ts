@@ -59,8 +59,14 @@ export class OrderExecutionService {
         )
       }
 
-      // Step 2: Send transaction
-      const txResponse = await signer.sendTransaction(order.transaction)
+      // Step 2: Fetch fresh nonce and send transaction
+      const currentNonce = await signer.provider!.getTransactionCount(signer.address, 'pending')
+      KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Using nonce: ${currentNonce}`)
+
+      const txResponse = await signer.sendTransaction({
+        ...order.transaction,
+        nonce: currentNonce
+      })
 
       // Log transaction hash immediately
       KatanaLogger.info(
@@ -106,6 +112,51 @@ export class OrderExecutionService {
       await DatabaseLogger.recordMetric(walletIndex, signer.address, `order_placed_${order.orderType}`)
 
     } catch (error: any) {
+      // Handle nonce errors with retry
+      if (error.code === 'NONCE_EXPIRED' || error.message?.includes('nonce too low')) {
+        KatanaLogger.warn(PREFIX, `[Wallet ${walletIndex}] Nonce error detected, retrying with fresh nonce...`)
+
+        try {
+          // Wait for network to sync
+          await new Promise(resolve => setTimeout(resolve, 2000))
+
+          // Fetch fresh nonce and retry
+          const retryNonce = await signer.provider!.getTransactionCount(signer.address, 'pending')
+          KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Retry with nonce: ${retryNonce}`)
+
+          const txResponse = await signer.sendTransaction({
+            ...order.transaction,
+            nonce: retryNonce
+          })
+
+          KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Retry transaction sent - Hash: ${txResponse.hash}`)
+
+          const receipt = await txResponse.wait()
+          KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] ✅ Retry confirmed in block ${receipt?.blockNumber}`)
+
+          await new Promise(resolve => setTimeout(resolve, 5000))
+
+          const blockchainOrderId = await this.fetchBlockchainOrderId(signer.address, txResponse.hash, true)
+          await this.saveOrderToDatabase(signer.address, blockchainOrderId, order, null, true)
+
+          KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] ✅ Order saved after retry - Order ID: ${blockchainOrderId}`)
+          await DatabaseLogger.recordMetric(walletIndex, signer.address, `order_placed_${order.orderType}`)
+
+          return
+        } catch (retryError: any) {
+          KatanaLogger.error(PREFIX, `[Wallet ${walletIndex}] Retry also failed`, retryError)
+          await DatabaseLogger.logError(
+            walletIndex,
+            signer.address,
+            'order_execution_retry_failed',
+            retryError.message,
+            'executeOrder',
+            { orderType: order.orderType }
+          )
+          throw retryError
+        }
+      }
+
       // Log error to database
       await DatabaseLogger.logError(
         walletIndex,
@@ -258,8 +309,14 @@ export class OrderExecutionService {
         )
       }
 
-      // Send transaction
-      const txResponse = await signer.sendTransaction(order.transaction)
+      // Fetch fresh nonce and send transaction
+      const currentNonce = await signer.provider!.getTransactionCount(signer.address, 'pending')
+      KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Using nonce: ${currentNonce}`)
+
+      const txResponse = await signer.sendTransaction({
+        ...order.transaction,
+        nonce: currentNonce
+      })
 
       // Log transaction hash immediately
       KatanaLogger.info(
@@ -296,6 +353,51 @@ export class OrderExecutionService {
       await DatabaseLogger.recordMetric(walletIndex, signer.address, `order_placed_${order.orderType}`)
 
     } catch (error: any) {
+      // Handle nonce errors with retry
+      if (error.code === 'NONCE_EXPIRED' || error.message?.includes('nonce too low')) {
+        KatanaLogger.warn(PREFIX, `[Wallet ${walletIndex}] Nonce error detected, retrying with fresh nonce...`)
+
+        try {
+          // Wait for network to sync
+          await new Promise(resolve => setTimeout(resolve, 2000))
+
+          // Fetch fresh nonce and retry
+          const retryNonce = await signer.provider!.getTransactionCount(signer.address, 'pending')
+          KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Retry with nonce: ${retryNonce}`)
+
+          const txResponse = await signer.sendTransaction({
+            ...order.transaction,
+            nonce: retryNonce
+          })
+
+          KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Retry transaction sent - Hash: ${txResponse.hash}`)
+
+          const receipt = await txResponse.wait()
+          KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] ✅ Retry confirmed in block ${receipt?.blockNumber}`)
+
+          await new Promise(resolve => setTimeout(resolve, 5000))
+
+          const blockchainOrderId = await this.fetchBlockchainOrderId(signer.address, txResponse.hash, true)
+          await this.saveOrderToDatabase(signer.address, blockchainOrderId, order, parentOrderId, true)
+
+          KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] ✅ Order saved after retry - Order ID: ${blockchainOrderId}`)
+          await DatabaseLogger.recordMetric(walletIndex, signer.address, `order_placed_${order.orderType}`)
+
+          return
+        } catch (retryError: any) {
+          KatanaLogger.error(PREFIX, `[Wallet ${walletIndex}] Retry also failed`, retryError)
+          await DatabaseLogger.logError(
+            walletIndex,
+            signer.address,
+            'counter_order_retry_failed',
+            retryError.message,
+            'executeCounterOrder',
+            { orderType: order.orderType, parentOrderId }
+          )
+          throw retryError
+        }
+      }
+
       // Log error to database
       await DatabaseLogger.logError(
         walletIndex,

@@ -274,9 +274,15 @@ export class RebalancingService {
 
         if (allowance < swapDetails.fromAmount) {
           KatanaLogger.info(PREFIX, 'Approving token spend...')
+
+          // Fetch fresh nonce for approval transaction
+          const approvalNonce = await wallet.signer.provider!.getTransactionCount(wallet.address, 'pending')
+          KatanaLogger.info(PREFIX, `Using nonce ${approvalNonce} for approval`)
+
           const approveTx = await tokenContract.approve(
             swapDetails.swapTx.to,
-            ethers.MaxUint256
+            ethers.MaxUint256,
+            { nonce: approvalNonce }
           )
           await approveTx.wait()
           KatanaLogger.info(PREFIX, 'Token approved')
@@ -288,14 +294,19 @@ export class RebalancingService {
         throw new Error('Cannot send transaction with empty data field')
       }
 
-      // Send swap transaction
+      // Fetch fresh nonce for swap transaction (use 'pending' to include any pending txs)
+      const currentNonce = await wallet.signer.provider!.getTransactionCount(wallet.address, 'pending')
+      KatanaLogger.info(PREFIX, `Fetched fresh nonce: ${currentNonce}`)
+
+      // Send swap transaction with explicit nonce
       KatanaLogger.info(PREFIX, 'Sending swap transaction...')
-      KatanaLogger.info(PREFIX, `TX params: to=${swapDetails.swapTx.to}, data length=${swapDetails.swapTx.data.length}, value=${swapDetails.swapTx.value || 0n}`)
+      KatanaLogger.info(PREFIX, `TX params: to=${swapDetails.swapTx.to}, data length=${swapDetails.swapTx.data.length}, value=${swapDetails.swapTx.value || 0n}, nonce=${currentNonce}`)
 
       const tx = await wallet.signer.sendTransaction({
         to: swapDetails.swapTx.to,
         data: swapDetails.swapTx.data,
-        value: swapDetails.swapTx.value || 0n
+        value: swapDetails.swapTx.value || 0n,
+        nonce: currentNonce
       })
 
       KatanaLogger.info(PREFIX, `Transaction sent: ${tx.hash}`)
@@ -316,6 +327,53 @@ export class RebalancingService {
       return tx.hash
 
     } catch (error: any) {
+      // Handle nonce errors with retry
+      if (error.code === 'NONCE_EXPIRED' || error.message?.includes('nonce too low')) {
+        KatanaLogger.warn(PREFIX, 'Nonce error detected, retrying with fresh nonce...')
+
+        try {
+          // Wait a bit for network to sync
+          await new Promise(resolve => setTimeout(resolve, 2000))
+
+          // Fetch the latest nonce again
+          const retryNonce = await wallet.signer.provider!.getTransactionCount(wallet.address, 'pending')
+          KatanaLogger.info(PREFIX, `Retry with nonce: ${retryNonce}`)
+
+          // Retry the transaction with fresh nonce
+          const tx = await wallet.signer.sendTransaction({
+            to: swapDetails.swapTx.to,
+            data: swapDetails.swapTx.data,
+            value: swapDetails.swapTx.value || 0n,
+            nonce: retryNonce
+          })
+
+          KatanaLogger.info(PREFIX, `Retry transaction sent: ${tx.hash}`)
+
+          const receipt = await tx.wait()
+          KatanaLogger.info(PREFIX, `Retry transaction confirmed in block ${receipt?.blockNumber}`)
+
+          await this.logToActivityTable(
+            wallet.address,
+            walletIndex,
+            tx.hash,
+            swapDetails,
+            receipt
+          )
+
+          return tx.hash
+        } catch (retryError: any) {
+          KatanaLogger.error(PREFIX, 'Retry also failed', retryError)
+          await DatabaseLogger.logError(
+            walletIndex,
+            wallet.address,
+            'rebalance_swap_retry_failed',
+            retryError.message,
+            'executeRebalanceProduction'
+          )
+          throw retryError
+        }
+      }
+
       await DatabaseLogger.logError(
         walletIndex,
         wallet.address,
