@@ -72,7 +72,7 @@ export class OrderStatusService {
       return []
     }
 
-    KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Polling blockchain for ${dbOrders.length} pending/partial order(s)`)
+    KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Fetching all orders from blockchain (checking ${dbOrders.length} pending/partial order(s))`)
 
     if (TEST_MODE_CONFIG.enabled) {
       return this.pollOrderStatusTestMode(dbOrders, walletAddress, walletIndex)
@@ -91,7 +91,7 @@ export class OrderStatusService {
   ): Promise<OrderStatusUpdate[]> {
     const updates: OrderStatusUpdate[] = []
 
-    // Fetch blockchain orders (silent mode)
+    // Fetch ALL blockchain orders (silent mode - no logging from TwapService)
     let blockchainOrders: any
     try {
       blockchainOrders = await TwapService.fetchLimitOrders(walletAddress, true)
@@ -99,6 +99,9 @@ export class OrderStatusService {
       KatanaLogger.error(PREFIX, `[Wallet ${walletIndex}] Failed to fetch blockchain orders`, error)
       return updates
     }
+
+    const totalBlockchainOrders = blockchainOrders.ALL?.length || 0
+    KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Fetched ${totalBlockchainOrders} total orders from blockchain`)
 
     // Match and detect changes
     for (const dbOrder of dbOrders) {
@@ -128,9 +131,9 @@ export class OrderStatusService {
     }
 
     if (updates.length > 0) {
-      KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Detected ${updates.length} order status update(s)`)
+      KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Detected ${updates.length} order status update(s) from ${dbOrders.length} pending/partial orders`)
     } else {
-      KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] No status changes detected`)
+      KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] No status changes detected for ${dbOrders.length} pending/partial orders`)
     }
 
     return updates
