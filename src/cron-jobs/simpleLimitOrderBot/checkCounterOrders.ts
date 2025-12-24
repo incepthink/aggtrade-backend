@@ -30,17 +30,49 @@ async function verifyAndPlaceMissingCounterOrders(
     const endOfToday = new Date()
     endOfToday.setUTCHours(23, 59, 59, 999)
 
-    // Build query conditions - only orders placed today
+    // First, get ALL filled orders to debug the discrepancy
+    const allFilledOrders = await BotOrdersSimple.findAll({
+      where: {
+        wallet_address: wallet.address.toLowerCase(),
+        status: 'filled'
+      },
+      order: [['filled_at', 'DESC']],
+      limit: 10
+    })
+
+    KatanaLogger.info(
+      PREFIX,
+      `[Wallet ${wallet.index}] Total filled orders: ${allFilledOrders.length} (showing last 10)`
+    )
+
+    // Count how many were placed today vs filled today
+    const placedTodayCount = allFilledOrders.filter(o =>
+      o.placed_at >= startOfToday && o.placed_at <= endOfToday
+    ).length
+    const filledTodayCount = allFilledOrders.filter(o =>
+      o.filled_at && o.filled_at >= startOfToday && o.filled_at <= endOfToday
+    ).length
+
+    KatanaLogger.info(
+      PREFIX,
+      `[Wallet ${wallet.index}] Orders placed today: ${placedTodayCount}, Orders filled today: ${filledTodayCount}`
+    )
+
+    // Build query conditions - only orders PLACED AND FILLED today
     const whereConditions: any = {
       wallet_address: wallet.address.toLowerCase(),
       status: 'filled',
       placed_at: {
         [Op.gte]: startOfToday,
         [Op.lte]: endOfToday
+      },
+      filled_at: {
+        [Op.gte]: startOfToday,
+        [Op.lte]: endOfToday
       }
     }
 
-    // Get filled orders placed today (grid and counter orders)
+    // Get filled orders that were BOTH placed AND filled today
     const filledOrders = await BotOrdersSimple.findAll({
       where: whereConditions,
       order: [['filled_at', 'ASC']]
@@ -49,14 +81,14 @@ async function verifyAndPlaceMissingCounterOrders(
     if (filledOrders.length === 0) {
       KatanaLogger.info(
         PREFIX,
-        `[Wallet ${wallet.index}] No filled orders placed today found`
+        `[Wallet ${wallet.index}] No orders placed AND filled today found (after ${startOfToday.toISOString()})`
       )
       return
     }
 
     KatanaLogger.info(
       PREFIX,
-      `[Wallet ${wallet.index}] Found ${filledOrders.length} filled order(s) placed today, checking for missing counter orders`
+      `[Wallet ${wallet.index}] Found ${filledOrders.length} order(s) placed AND filled today, checking for missing counter orders`
     )
 
     let missingCount = 0
@@ -65,6 +97,11 @@ async function verifyAndPlaceMissingCounterOrders(
     // Check each filled order for counter order
     for (const filledOrder of filledOrders) {
       try {
+        KatanaLogger.info(
+          PREFIX,
+          `[Wallet ${wallet.index}] Checking order ${filledOrder.id} (${filledOrder.order_type}, ${filledOrder.from_token}/${filledOrder.to_token}, placed: ${filledOrder.placed_at.toISOString()}, filled: ${filledOrder.filled_at?.toISOString() || 'N/A'})`
+        )
+
         // Determine expected counter order type
         const isParentBuyOrder = filledOrder.order_type.includes('buy')
         const expectedCounterType = isParentBuyOrder ? 'counter_sell' : 'counter_buy'
@@ -76,6 +113,20 @@ async function verifyAndPlaceMissingCounterOrders(
             order_type: expectedCounterType
           }
         })
+
+        if (existingCounterOrder) {
+          KatanaLogger.info(
+            PREFIX,
+            `[Wallet ${wallet.index}] Order ${filledOrder.id} already has counter order ${existingCounterOrder.id} (${existingCounterOrder.status})`
+          )
+          continue
+        }
+
+        // No counter order exists - need to place one
+        KatanaLogger.info(
+          PREFIX,
+          `[Wallet ${wallet.index}] Order ${filledOrder.id} missing counter order, attempting to place...`
+        )
 
         if (!existingCounterOrder) {
           missingCount++
@@ -120,6 +171,15 @@ async function verifyAndPlaceMissingCounterOrders(
 
           if (success) {
             placedCount++
+            KatanaLogger.info(
+              PREFIX,
+              `[Wallet ${wallet.index}] ✅ Successfully placed counter order for order ${filledOrder.id}`
+            )
+          } else {
+            KatanaLogger.warn(
+              PREFIX,
+              `[Wallet ${wallet.index}] ⚠️ Failed to place counter order for order ${filledOrder.id} (see CounterOrder logs for details)`
+            )
           }
 
           // Small delay between placements to avoid rate limiting
