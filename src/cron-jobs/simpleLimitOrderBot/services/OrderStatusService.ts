@@ -68,8 +68,11 @@ export class OrderStatusService {
     })
 
     if (dbOrders.length === 0) {
+      KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] No pending/partial orders to check`)
       return []
     }
+
+    KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Polling blockchain for ${dbOrders.length} pending/partial order(s)`)
 
     if (TEST_MODE_CONFIG.enabled) {
       return this.pollOrderStatusTestMode(dbOrders, walletAddress, walletIndex)
@@ -122,6 +125,12 @@ export class OrderStatusService {
       } catch (error) {
         KatanaLogger.error(PREFIX, `[Wallet ${walletIndex}] Failed to process order ${dbOrder.id}`, error)
       }
+    }
+
+    if (updates.length > 0) {
+      KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] Detected ${updates.length} order status update(s)`)
+    } else {
+      KatanaLogger.info(PREFIX, `[Wallet ${walletIndex}] No status changes detected`)
     }
 
     return updates

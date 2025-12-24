@@ -11,6 +11,7 @@ import BotOrdersSimple from '../../models/BotOrdersSimple'
 import { getToken } from '../gridBot/tokenPairs.config'
 import { toWei } from '../utils/botHelpers'
 import { getGridConfigForPair } from './config'
+import { Op } from 'sequelize'
 
 const PREFIX = '[CheckCounterOrders]'
 
@@ -22,21 +23,41 @@ async function verifyAndPlaceMissingCounterOrders(
   pairConfig: ReturnType<typeof getGridConfigForPair>
 ): Promise<void> {
   try {
-    // Build query conditions
+    // Calculate start and end of today (UTC)
+    const startOfToday = new Date()
+    startOfToday.setUTCHours(0, 0, 0, 0)
+
+    const endOfToday = new Date()
+    endOfToday.setUTCHours(23, 59, 59, 999)
+
+    // Build query conditions - only orders placed today
     const whereConditions: any = {
       wallet_address: wallet.address.toLowerCase(),
-      status: 'filled'
+      status: 'filled',
+      placed_at: {
+        [Op.gte]: startOfToday,
+        [Op.lte]: endOfToday
+      }
     }
 
-    // Get ALL filled orders (grid and counter orders)
+    // Get filled orders placed today (grid and counter orders)
     const filledOrders = await BotOrdersSimple.findAll({
       where: whereConditions,
       order: [['filled_at', 'ASC']]
     })
 
     if (filledOrders.length === 0) {
+      KatanaLogger.info(
+        PREFIX,
+        `[Wallet ${wallet.index}] No filled orders placed today found`
+      )
       return
     }
+
+    KatanaLogger.info(
+      PREFIX,
+      `[Wallet ${wallet.index}] Found ${filledOrders.length} filled order(s) placed today, checking for missing counter orders`
+    )
 
     let missingCount = 0
     let placedCount = 0
@@ -153,7 +174,6 @@ export async function checkCounterOrders(
     const updates = await OrderStatusService.pollOrderStatus(wallet.address, wallet.index)
 
     if (updates.length > 0) {
-      KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Processing ${updates.length} filled order(s)`)
 
       // Process each status update
       for (const update of updates) {
