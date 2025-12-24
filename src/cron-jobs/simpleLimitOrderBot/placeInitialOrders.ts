@@ -228,6 +228,11 @@ export async function placeInitialOrders(
     // Place remaining pairs
     const startFrom = botWalletRecord.placed_initial_orders
 
+    // Early exit if all pairs already placed
+    if (startFrom >= totalPairs) {
+      return
+    }
+
     if (startFrom > 0) {
       KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Resuming from pair ${startFrom + 1}/${totalPairs}`)
     } else if (totalPairs > 0) {

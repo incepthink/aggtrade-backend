@@ -32,11 +32,6 @@ let isRunning = false
 let lastMidnightReset: string | null = null
 
 /**
- * Track first run after startup to trigger initial reset/rebalance
- */
-let isFirstRun = true
-
-/**
  * Check if current time is midnight (00:00:00)
  * Returns true during the midnight hour (00:00 - 00:59)
  */
@@ -308,17 +303,10 @@ export async function runSimpleLimitOrderBot(): Promise<void> {
       KatanaLogger.info(PREFIX, `Found ${botWallets.length} bot wallets`)
     }
 
-    // Check if we should trigger reset/rebalance (on first run OR at midnight)
-    const shouldReset = isFirstRun || shouldTriggerMidnightReset()
+    // Check if we should trigger reset/rebalance (ONLY at midnight, NOT on restart)
+    const shouldReset = shouldTriggerMidnightReset()
 
     if (shouldReset) {
-      // Log why we're resetting
-      if (isFirstRun) {
-        KatanaLogger.info(PREFIX, '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-        KatanaLogger.info(PREFIX, '   STARTUP RESET: First run after restart')
-        KatanaLogger.info(PREFIX, '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-        isFirstRun = false  // Clear flag after first run
-      }
 
       // Step 1: Rebalance all wallets to 50/50 allocation
       await rebalanceAllWallets(provider, botWallets)
