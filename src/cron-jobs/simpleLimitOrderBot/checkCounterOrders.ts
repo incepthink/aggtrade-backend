@@ -12,6 +12,7 @@ import { getToken } from '../gridBot/tokenPairs.config'
 import { toWei } from '../utils/botHelpers'
 import { getGridConfigForPair } from './config'
 import { Op } from 'sequelize'
+import { TwapService } from '../../services/twap'
 
 const PREFIX = '[CheckCounterOrders]'
 
@@ -30,86 +31,92 @@ async function verifyAndPlaceMissingCounterOrders(
     const endOfToday = new Date()
     endOfToday.setUTCHours(23, 59, 59, 999)
 
-    // First, get ALL filled orders to debug the discrepancy
-    const allFilledOrders = await BotOrdersSimple.findAll({
-      where: {
-        wallet_address: wallet.address.toLowerCase(),
-        status: 'filled'
-      },
-      order: [['filled_at', 'DESC']],
-      limit: 10
-    })
+    // STEP 1: Fetch ALL orders from blockchain for this wallet
+    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Step 1: Fetching all orders from blockchain...`)
 
-    KatanaLogger.info(
-      PREFIX,
-      `[Wallet ${wallet.index}] Total filled orders: ${allFilledOrders.length} (showing last 10)`
-    )
-
-    // Count how many were placed today vs filled today
-    const placedTodayCount = allFilledOrders.filter(o =>
-      o.placed_at >= startOfToday && o.placed_at <= endOfToday
-    ).length
-    const filledTodayCount = allFilledOrders.filter(o =>
-      o.filled_at && o.filled_at >= startOfToday && o.filled_at <= endOfToday
-    ).length
-
-    KatanaLogger.info(
-      PREFIX,
-      `[Wallet ${wallet.index}] Orders placed today: ${placedTodayCount}, Orders filled today: ${filledTodayCount}`
-    )
-
-    // Build query conditions - only orders PLACED AND FILLED today
-    const whereConditions: any = {
-      wallet_address: wallet.address.toLowerCase(),
-      status: 'filled',
-      placed_at: {
-        [Op.gte]: startOfToday,
-        [Op.lte]: endOfToday
-      },
-      filled_at: {
-        [Op.gte]: startOfToday,
-        [Op.lte]: endOfToday
-      }
-    }
-
-    // Get filled orders that were BOTH placed AND filled today
-    const filledOrders = await BotOrdersSimple.findAll({
-      where: whereConditions,
-      order: [['filled_at', 'ASC']]
-    })
-
-    if (filledOrders.length === 0) {
-      KatanaLogger.info(
-        PREFIX,
-        `[Wallet ${wallet.index}] No orders placed AND filled today found (after ${startOfToday.toISOString()})`
-      )
+    let blockchainOrders: any
+    try {
+      blockchainOrders = await TwapService.fetchLimitOrders(wallet.address, true)
+    } catch (error) {
+      KatanaLogger.error(PREFIX, `[Wallet ${wallet.index}] Failed to fetch blockchain orders`, error)
       return
     }
 
-    KatanaLogger.info(
-      PREFIX,
-      `[Wallet ${wallet.index}] Found ${filledOrders.length} order(s) placed AND filled today, checking for missing counter orders`
-    )
+    const allBlockchainOrders = blockchainOrders.ALL || []
+    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Found ${allBlockchainOrders.length} orders on blockchain`)
+
+    // STEP 2: Get all orders placed today from DB
+    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Step 2: Getting orders placed today from database...`)
+
+    const ordersPlacedToday = await BotOrdersSimple.findAll({
+      where: {
+        wallet_address: wallet.address.toLowerCase(),
+        placed_at: {
+          [Op.gte]: startOfToday,
+          [Op.lte]: endOfToday
+        }
+      },
+      order: [['placed_at', 'ASC']]
+    })
+
+    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Found ${ordersPlacedToday.length} orders placed today in DB`)
+
+    if (ordersPlacedToday.length === 0) {
+      KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] No orders placed today, skipping`)
+      return
+    }
+
+    // STEP 3: Find filled orders by comparing blockchain data with DB data
+    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Step 3: Comparing blockchain data to find filled orders...`)
+
+    const filledOrders: Array<{dbOrder: any, blockchainOrder: any}> = []
+
+    for (const dbOrder of ordersPlacedToday) {
+      const blockchainOrder = allBlockchainOrders.find(
+        (bo: any) => String(bo.id) === String(dbOrder.blockchain_order_id)
+      )
+
+      if (!blockchainOrder) {
+        KatanaLogger.warn(PREFIX, `[Wallet ${wallet.index}] Order ${dbOrder.id} not found on blockchain`)
+        continue
+      }
+
+      // Check if order is filled on blockchain
+      const isFilled = blockchainOrder.status === 'Completed' || blockchainOrder.progress === 100
+
+      if (isFilled) {
+        filledOrders.push({ dbOrder, blockchainOrder })
+      }
+    }
+
+    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Found ${filledOrders.length} filled order(s) from today`)
+
+    if (filledOrders.length === 0) {
+      return
+    }
+
+    // STEP 4: Place counter orders for filled orders
+    KatanaLogger.info(PREFIX, `[Wallet ${wallet.index}] Step 4: Placing counter orders for filled orders...`)
 
     let missingCount = 0
     let placedCount = 0
 
     // Check each filled order for counter order
-    for (const filledOrder of filledOrders) {
+    for (const { dbOrder, blockchainOrder } of filledOrders) {
       try {
         KatanaLogger.info(
           PREFIX,
-          `[Wallet ${wallet.index}] Checking order ${filledOrder.id} (${filledOrder.order_type}, ${filledOrder.from_token}/${filledOrder.to_token}, placed: ${filledOrder.placed_at.toISOString()}, filled: ${filledOrder.filled_at?.toISOString() || 'N/A'})`
+          `[Wallet ${wallet.index}] Checking order ${dbOrder.id} (${dbOrder.order_type}, ${dbOrder.from_token}/${dbOrder.to_token}, blockchain status: ${blockchainOrder.status}, progress: ${blockchainOrder.progress}%)`
         )
 
         // Determine expected counter order type
-        const isParentBuyOrder = filledOrder.order_type.includes('buy')
+        const isParentBuyOrder = dbOrder.order_type.includes('buy')
         const expectedCounterType = isParentBuyOrder ? 'counter_sell' : 'counter_buy'
 
         // Check if counter order exists
         const existingCounterOrder = await BotOrdersSimple.findOne({
           where: {
-            parent_order_id: filledOrder.id,
+            parent_order_id: dbOrder.id,
             order_type: expectedCounterType
           }
         })
@@ -117,7 +124,7 @@ async function verifyAndPlaceMissingCounterOrders(
         if (existingCounterOrder) {
           KatanaLogger.info(
             PREFIX,
-            `[Wallet ${wallet.index}] Order ${filledOrder.id} already has counter order ${existingCounterOrder.id} (${existingCounterOrder.status})`
+            `[Wallet ${wallet.index}] Order ${dbOrder.id} already has counter order ${existingCounterOrder.id} (${existingCounterOrder.status})`
           )
           continue
         }
@@ -125,70 +132,67 @@ async function verifyAndPlaceMissingCounterOrders(
         // No counter order exists - need to place one
         KatanaLogger.info(
           PREFIX,
-          `[Wallet ${wallet.index}] Order ${filledOrder.id} missing counter order, attempting to place...`
+          `[Wallet ${wallet.index}] Order ${dbOrder.id} missing counter order, attempting to place...`
         )
 
-        if (!existingCounterOrder) {
-          missingCount++
+        missingCount++
 
-          // Get token configs to convert amounts to Wei
-          const fromToken = getToken(filledOrder.from_token)
-          const toToken = getToken(filledOrder.to_token)
+        // Get token configs to convert amounts to Wei
+        const fromToken = getToken(dbOrder.from_token)
+        const toToken = getToken(dbOrder.to_token)
 
-          // Convert human-readable amounts to Wei format
-          const fromAmountWei = toWei(filledOrder.from_amount, fromToken.decimals)
-          const toAmountWei = toWei(filledOrder.to_amount, toToken.decimals)
+        // Use blockchain data for filled amounts
+        const fromAmountWei = blockchainOrder.filledSrcAmount || blockchainOrder.srcAmount
+        const toAmountWei = blockchainOrder.filledDstAmount || blockchainOrder.dstAmount
 
-          // Create mock update object to reuse existing counter order logic
-          // We cast to 'any' since we only need the fields used by placeCounterOrder
-          const mockUpdate: any = {
-            dbOrder: filledOrder,
-            blockchainOrder: {
-              id: filledOrder.blockchain_order_id,
-              status: 'Completed',
-              progress: 100,
-              filledSrcAmount: fromAmountWei,
-              filledDstAmount: toAmountWei,
-              srcAmount: fromAmountWei,
-              dstAmount: toAmountWei
-            },
-            oldStatus: filledOrder.status,
-            newStatus: 'filled',
-            progress: 100
-          }
-
-          // Place the missing counter order
-          const success = await CounterOrderService.placeCounterOrder(
-            mockUpdate,
-            wallet.signer,
-            wallet.index,
-            {
-              profitMarginPercent: pairConfig.PROFIT_MARGIN_PERCENT,
-              minOrderSizeUsd: pairConfig.MIN_ORDER_SIZE_USD,
-              expiryHours: pairConfig.EXPIRY_HOURS
-            }
-          )
-
-          if (success) {
-            placedCount++
-            KatanaLogger.info(
-              PREFIX,
-              `[Wallet ${wallet.index}] ✅ Successfully placed counter order for order ${filledOrder.id}`
-            )
-          } else {
-            KatanaLogger.warn(
-              PREFIX,
-              `[Wallet ${wallet.index}] ⚠️ Failed to place counter order for order ${filledOrder.id} (see CounterOrder logs for details)`
-            )
-          }
-
-          // Small delay between placements to avoid rate limiting
-          await new Promise(resolve => setTimeout(resolve, 1000))
+        // Create update object to pass to counter order service
+        const update: any = {
+          dbOrder: dbOrder,
+          blockchainOrder: {
+            id: blockchainOrder.id,
+            status: blockchainOrder.status,
+            progress: blockchainOrder.progress,
+            filledSrcAmount: fromAmountWei,
+            filledDstAmount: toAmountWei,
+            srcAmount: blockchainOrder.srcAmount,
+            dstAmount: blockchainOrder.dstAmount
+          },
+          oldStatus: dbOrder.status,
+          newStatus: 'filled',
+          progress: blockchainOrder.progress
         }
+
+        // Place the missing counter order
+        const success = await CounterOrderService.placeCounterOrder(
+          update,
+          wallet.signer,
+          wallet.index,
+          {
+            profitMarginPercent: pairConfig.PROFIT_MARGIN_PERCENT,
+            minOrderSizeUsd: pairConfig.MIN_ORDER_SIZE_USD,
+            expiryHours: pairConfig.EXPIRY_HOURS
+          }
+        )
+
+        if (success) {
+          placedCount++
+          KatanaLogger.info(
+            PREFIX,
+            `[Wallet ${wallet.index}] ✅ Successfully placed counter order for order ${dbOrder.id}`
+          )
+        } else {
+          KatanaLogger.warn(
+            PREFIX,
+            `[Wallet ${wallet.index}] ⚠️ Failed to place counter order for order ${dbOrder.id} (see CounterOrder logs for details)`
+          )
+        }
+
+        // Small delay between placements to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 1000))
       } catch (error) {
         KatanaLogger.error(
           PREFIX,
-          `[Wallet ${wallet.index}] Failed to verify/place counter order for order ${filledOrder.id}`,
+          `[Wallet ${wallet.index}] Failed to verify/place counter order for order ${dbOrder.id}`,
           error
         )
         // Continue with next order
