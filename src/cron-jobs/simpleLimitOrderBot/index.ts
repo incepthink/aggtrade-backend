@@ -200,7 +200,8 @@ async function processWallet(
   botWalletRecord: any,
   walletNum: number,
   totalWallets: number,
-  walletStartTime: number
+  walletStartTime: number,
+  isMidnightReset: boolean
 ): Promise<void> {
   KatanaLogger.info(PREFIX, `Processing Wallet ${walletNum}/${totalWallets}: ${wallet.address.slice(0, 10)}...`)
 
@@ -208,13 +209,15 @@ async function processWallet(
     // Sync wallet balances
     await BalanceService.syncBalances(wallet.signer.provider!, wallet.address, wallet.index)
 
-    // Always attempt to place orders - placeInitialOrders will determine if balance allows more
-    await placeInitialOrders(wallet, botWalletRecord)
+    // Only place initial orders during midnight reset
+    if (isMidnightReset) {
+      await placeInitialOrders(wallet, botWalletRecord)
 
-    // After attempting to place initial orders, refresh the record
-    const updatedRecord = await WalletService.getWalletRecord(wallet.address)
-    if (updatedRecord) {
-      botWalletRecord.placed_initial_orders = updatedRecord.placed_initial_orders
+      // After placing initial orders, refresh the record
+      const updatedRecord = await WalletService.getWalletRecord(wallet.address)
+      if (updatedRecord) {
+        botWalletRecord.placed_initial_orders = updatedRecord.placed_initial_orders
+      }
     }
 
     // Check for counter-orders if we have any placed pairs
@@ -370,7 +373,7 @@ export async function runSimpleLimitOrderBot(): Promise<void> {
         wallet.tradingPool = botWalletRecord.trading_pool
 
         // Process this wallet
-        await processWallet(wallet, botWalletRecord, walletNum, totalWallets, walletStartTime)
+        await processWallet(wallet, botWalletRecord, walletNum, totalWallets, walletStartTime, shouldReset)
 
         const walletDuration = ((Date.now() - walletStartTime) / 1000).toFixed(2)
         KatanaLogger.info(PREFIX, `[${walletNum}/${totalWallets}] ✅ Completed in ${walletDuration}s`)
