@@ -5,6 +5,7 @@ import activityRouter from "./activity"
 import trackingRouter from "./tracking"
 import transactionRouter from "./transaction"
 import botRouter from "./bot"
+import xpRouter from "./xp"
 
 const initializeRoutes = (app: Application) => {
     app.use("/platform", platformRouter)
@@ -13,6 +14,7 @@ const initializeRoutes = (app: Application) => {
     app.use("/tracking", trackingRouter)
     app.use("/transaction", transactionRouter)
     app.use("/bot", botRouter)
+    app.use("/xp", xpRouter)
 }
 
 export default initializeRoutes;

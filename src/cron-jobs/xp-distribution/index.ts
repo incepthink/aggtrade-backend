@@ -41,9 +41,11 @@ export const disrtibuteXPJob = async (
         console.log("  Errors: ", feeUpdateResult.errors)
     }
 
-    // Step 2: Fetch limit orders for this week
+    // Step 2: Fetch swaps for this week (both CLASSIC and LIMIT_ORDER)
     const whereClause: any = {
-        swap_type: 'LIMIT_ORDER',
+        swap_type: {
+            [Op.in]: ['CLASSIC', 'LIMIT_ORDER']
+        },
         status: 'success',
         timestamp: {
             [Op.gte]: weekStart,
@@ -56,10 +58,10 @@ export const disrtibuteXPJob = async (
         whereClause.wallet_address = testWalletAddress.toLowerCase()
     }
 
-    const allLimitOrders = await SushiswapActivity.findAll({ where: whereClause })
+    const allSwaps = await SushiswapActivity.findAll({ where: whereClause })
 
-    if (allLimitOrders.length === 0) {
-        console.log("\n⚠️  No limit orders found for the specified criteria")
+    if (allSwaps.length === 0) {
+        console.log("\n⚠️  No swaps found for the specified criteria")
 
         // If testing a specific wallet, store 0 XP record
         if (testWalletAddress) {
@@ -91,7 +93,12 @@ export const disrtibuteXPJob = async (
                             ordersProcessed: feeUpdateResult.totalOrders,
                             feesUpdated: feeUpdateResult.feesUpdated
                         },
-                        note: "No limit orders found for this period"
+                        swapTypeBreakdown: {
+                            classic: 0,
+                            limitOrder: 0,
+                            total: 0
+                        },
+                        note: "No swaps found for this period"
                     },
                     calculated_at: new Date()
                 })
@@ -106,13 +113,13 @@ export const disrtibuteXPJob = async (
     }
 
     // Step 3: Group by wallet and process each wallet
-    const walletGroups = new Map<string, typeof allLimitOrders>()
-    for (const order of allLimitOrders) {
-        const wallet = order.wallet_address
+    const walletGroups = new Map<string, typeof allSwaps>()
+    for (const swap of allSwaps) {
+        const wallet = swap.wallet_address
         if (!walletGroups.has(wallet)) {
             walletGroups.set(wallet, [])
         }
-        walletGroups.get(wallet)!.push(order)
+        walletGroups.get(wallet)!.push(swap)
     }
 
     console.log(`\n=== PROCESSING ${walletGroups.size} WALLET(S) ===\n`)
@@ -121,17 +128,25 @@ export const disrtibuteXPJob = async (
     let savedCount = 0
 
     // Process each wallet
-    for (const [walletAddress, limitOrders] of walletGroups.entries()) {
+    for (const [walletAddress, swaps] of walletGroups.entries()) {
         processedCount++
         console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
         console.log(`📊 Wallet ${processedCount}/${walletGroups.size}: ${walletAddress}`)
         console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
 
+        // Calculate swap type breakdown
+        const classicSwaps = swaps.filter(s => s.swap_type === 'CLASSIC')
+        const limitOrderSwaps = swaps.filter(s => s.swap_type === 'LIMIT_ORDER')
+
+        console.log("\n=== SWAP TYPE BREAKDOWN ===")
+        console.log("Total Swaps: ", swaps.length)
+        console.log("  Classic swaps: ", classicSwaps.length)
+        console.log("  Limit order swaps: ", limitOrderSwaps.length)
+
         // Get per-pair eligible volumes and fees
-        const { perPairData, totalEligibleVolume, totalFees } = getEligibleVolumeAndFees(limitOrders)
+        const { perPairData, totalEligibleVolume, totalFees } = getEligibleVolumeAndFees(swaps)
 
         console.log("\n=== ELIGIBLE VOLUME SUMMARY ===")
-        console.log("Total Swaps: ", limitOrders.length)
         console.log("Total Eligible Volume: $", totalEligibleVolume.toFixed(2))
         console.log("Total Fees: $", totalFees.toFixed(4))
         console.log("Number of Pairs: ", perPairData.length)
@@ -175,7 +190,7 @@ export const disrtibuteXPJob = async (
             newPairs: []
         }
 
-        const userId = limitOrders[0].user_id
+        const userId = swaps[0].user_id
         if (userId) {
             upbResult = await calculateUniquePairBonus(userId, perPairData, weekStart)
         }
@@ -210,7 +225,7 @@ export const disrtibuteXPJob = async (
                 total_fees: totalFees,
                 unique_pairs_count: perPairData.length,
                 new_pairs_count: upbResult.countOfNewPairs,
-                total_swaps: limitOrders.length,
+                total_swaps: swaps.length,
                 metadata: {
                     perPairResults: perPairResults.map(r => ({
                         pair: r.pair,
@@ -224,6 +239,13 @@ export const disrtibuteXPJob = async (
                     feeUpdateSummary: {
                         ordersProcessed: feeUpdateResult.totalOrders,
                         feesUpdated: feeUpdateResult.feesUpdated
+                    },
+                    swapTypeBreakdown: {
+                        classic: classicSwaps.length,
+                        limitOrder: limitOrderSwaps.length,
+                        total: swaps.length,
+                        classicVolume: classicSwaps.reduce((sum, s) => sum + Number(s.usd_volume), 0),
+                        limitOrderVolume: limitOrderSwaps.reduce((sum, s) => sum + Number(s.usd_volume), 0)
                     }
                 },
                 calculated_at: new Date()

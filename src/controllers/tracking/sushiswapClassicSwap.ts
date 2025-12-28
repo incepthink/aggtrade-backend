@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from "express"
 import SushiswapActivity from "../../models/SushiswapActivity"
 import User from "../../models/User"
 import Token from "../../models/Token"
+import { invalidateXPCache } from "../xp/preview"
 
 // SSE clients manager
 const sseClients = new Set<Response>()
@@ -107,6 +108,9 @@ export const logClassicSwap = async (req: Request, res: Response, next: NextFunc
     
     // Broadcast to SSE clients
     broadcastNewSwap(activity)
+
+    // Invalidate XP cache for this wallet
+    await invalidateXPCache(normalizedWallet)
 
     return res.status(201).json({
       message: 'Classic swap logged successfully',

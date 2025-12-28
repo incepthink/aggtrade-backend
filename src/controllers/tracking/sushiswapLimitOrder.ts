@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from "express"
 import SushiswapActivity from "../../models/SushiswapActivity"
 import User from "../../models/User"
 import Token from "../../models/Token"
+import { invalidateXPCache } from "../xp/preview"
 
 interface LimitOrderSyncRequest {
   walletAddress: string
@@ -213,6 +214,11 @@ export const syncLimitOrders = async (req: Request, res: Response, next: NextFun
 
         newRecordsCount++
       }
+    }
+
+    // Invalidate XP cache if any orders were created or updated
+    if (newRecordsCount > 0 || updatedCount > 0) {
+      await invalidateXPCache(normalizedWallet)
     }
 
     return res.status(200).json({

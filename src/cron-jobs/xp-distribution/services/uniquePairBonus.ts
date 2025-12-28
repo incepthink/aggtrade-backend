@@ -88,6 +88,9 @@ export async function calculateUniquePairBonus(
   const historicalSwaps = await SushiswapActivity.findAll({
     where: {
       user_id: userId,
+      swap_type: {
+        [Op.in]: ['CLASSIC', 'LIMIT_ORDER']
+      },
       status: "success",
       timestamp: {
         [Op.lt]: weekStart
