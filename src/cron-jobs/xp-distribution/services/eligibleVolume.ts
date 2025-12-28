@@ -4,13 +4,12 @@ import { KatanaLogger } from "../../../utils/logger";
 const LOG_PREFIX = "[XP-ELIGIBLE-VOL]";
 
 /**
- * Interface for tracking net volume per wallet/pair/window group
+ * Interface for tracking net volume per wallet/pair group
  * Used in directional netting to aggregate buy/sell activity
  */
 interface NetVolume {
   wallet: string;
   pair: string;
-  window: number;
   netUsd: number;
   totalFees: number;
   swapIds: number[];
@@ -51,15 +50,15 @@ export const normalizePair = (tokenA: string, tokenB: string): string => {
  *
  * What it does:
  * - Converts a timestamp into a fixed time window bucket
- * - Used for grouping swaps that occurred in the same time period
+ * - Used for round-trip detection (5-minute windows)
  *
  * How it works:
  * - Converts windowMinutes to milliseconds
  * - Floors the timestamp to the nearest window boundary
- * - Example: If windowMinutes=15, timestamps 10:07, 10:12, 10:14 all → 10:00
+ * - Example: If windowMinutes=5, timestamps 10:02, 10:03, 10:04 all → 10:00
  *
- * Why: Enables time-based grouping for both 15-min netting windows
- * and 5-min round-trip detection windows
+ * Why: Enables time-based grouping for 5-min round-trip detection windows
+ * Note: Directional netting no longer uses time windows - it groups across entire period
  */
 const getTimeWindow = (timestamp: Date, windowMinutes: number): number => {
   const windowMs = windowMinutes * 60 * 1000;
@@ -203,19 +202,19 @@ const detectRoundTrips = (swaps: SushiswapActivity[]): Set<number> => {
  * STEP 3: calculateDirectionalNetting
  *
  * What it does:
- * - Groups swaps by (wallet, normalized_pair, 15-minute window)
+ * - Groups swaps by (wallet, normalized_pair) across the entire time period
  * - For each group, calculates net buy volume minus sell volume
  * - This identifies wash trading where users buy and sell the same pair
  *
  * How it works:
- * 1. Create groups using key: "{wallet}_{pair}_{window}"
+ * 1. Create groups using key: "{wallet}_{pair}"
  * 2. For each swap in a group:
  *    - If token is token_to_address → it's a BUY (add to buys)
  *    - If token is token_from_address → it's a SELL (add to sells)
  * 3. Calculate net = buys - sells for each token in the pair
  * 4. Return array of NetVolume objects with the net USD value
  *
- * Why: A user who buys $100 and sells $80 of the same pair in a short window
+ * Why: A user who buys $100 and sells $80 of the same pair (at any time)
  * is likely wash trading. We only count the net difference ($20) as real volume.
  */
 const calculateDirectionalNetting = (swaps: SushiswapActivity[]): NetVolume[] => {
@@ -223,31 +222,24 @@ const calculateDirectionalNetting = (swaps: SushiswapActivity[]): NetVolume[] =>
     totalSwaps: swaps.length
   });
 
-  // Map to store aggregated data for each wallet/pair/window group
-  // Key format: "{wallet_address}_{normalized_pair}_{time_window}"
+  // Map to store aggregated data for each wallet/pair group
+  // Key format: "{wallet_address}_{normalized_pair}"
   const groups = new Map<string, {
     wallet: string;
     pair: string;
-    window: number;
     buyVolumeUsd: number;
     sellVolumeUsd: number;
     totalFees: number;
     swapIds: number[];
   }>();
 
-  // Define 15-minute window for grouping related swaps
-  const fifteenMinutes = 15;
-
   // Process each swap and assign it to the appropriate group
   for (const swap of swaps) {
-    // Calculate which 15-minute window this swap belongs to
-    const window = getTimeWindow(swap.timestamp, fifteenMinutes);
-
     // Create normalized pair key (alphabetically sorted tokens)
     const pair = normalizePair(swap.token_from_address, swap.token_to_address);
 
-    // Create unique group key for this wallet/pair/window combination
-    const groupKey = `${swap.wallet_address}_${pair}_${window}`;
+    // Create unique group key for this wallet/pair combination
+    const groupKey = `${swap.wallet_address}_${pair}`;
 
     const isNewGroup = !groups.has(groupKey);
 
@@ -256,7 +248,6 @@ const calculateDirectionalNetting = (swaps: SushiswapActivity[]): NetVolume[] =>
       groups.set(groupKey, {
         wallet: swap.wallet_address,
         pair,
-        window,
         buyVolumeUsd: 0,
         sellVolumeUsd: 0,
         totalFees: 0,
@@ -266,7 +257,6 @@ const calculateDirectionalNetting = (swaps: SushiswapActivity[]): NetVolume[] =>
       KatanaLogger.info(LOG_PREFIX, "New netting group created", {
         wallet: swap.wallet_address.slice(0, 10),
         pair: `${pair.split('-')[0].slice(0, 8)}/${pair.split('-')[1].slice(0, 8)}`,
-        windowTime: new Date(window).toISOString(),
         swapId: swap.id
       });
     }
@@ -329,7 +319,6 @@ const calculateDirectionalNetting = (swaps: SushiswapActivity[]): NetVolume[] =>
     KatanaLogger.info(LOG_PREFIX, "Group net volume calculated", {
       wallet: group.wallet.slice(0, 10),
       pair: `${group.pair.split('-')[0].slice(0, 8)}/${group.pair.split('-')[1].slice(0, 8)}`,
-      windowTime: new Date(group.window).toISOString(),
       buyVolume: group.buyVolumeUsd,
       sellVolume: group.sellVolumeUsd,
       netVolume: netUsd,
@@ -342,7 +331,6 @@ const calculateDirectionalNetting = (swaps: SushiswapActivity[]): NetVolume[] =>
     netVolumes.push({
       wallet: group.wallet,
       pair: group.pair,
-      window: group.window,
       netUsd,
       totalFees: group.totalFees,
       swapIds: group.swapIds
@@ -366,17 +354,17 @@ const calculateDirectionalNetting = (swaps: SushiswapActivity[]): NetVolume[] =>
  * - Applies four filters: minimum size, minimum impact, round-trip detection, and directional netting
  *
  * How it works:
- * STEP 1: Filter out dust trades (< $10 USD) and low-impact swaps (< 1bp) // verified
+ * STEP 1: Filter out dust trades (< $8 USD) and low-impact swaps (< 1bp) // verified
  * STEP 2: Detect and exclude round-trip farming pairs (5-minute reversals)
  * STEP 3: Remove excluded swaps from the array
- * STEP 4: Apply directional netting (15-minute windows, net buys - sells)
+ * STEP 4: Apply directional netting (per wallet/pair, net buys - sells across entire period)
  * STEP 5: Sum the absolute values of all net volumes and total fees // verified
  *
  * Why: This algorithm identifies legitimate trading volume by filtering out:
  * - Dust trades that don't represent meaningful activity
  * - Low-impact trades that may indicate wash trading or self-matching
  * - Round-trip farming (quick reversals to generate fake volume)
- * - Wash trading (offsetting buys and sells in the same pair/window)
+ * - Wash trading (offsetting buys and sells in the same pair, regardless of timing)
  */
 export const getEligibleVolumeAndFees = (swaps: SushiswapActivity[]): {
   perPairData: PairEligibleVolume[];
@@ -505,12 +493,12 @@ export const getEligibleVolumeAndFees = (swaps: SushiswapActivity[]): {
   }
 
   // ============================================================================
-  // STEP 4: DIRECTIONAL NETTING (15-minute windows)
+  // STEP 4: DIRECTIONAL NETTING (per wallet/pair across entire period)
   // ============================================================================
-  // What: Group swaps by wallet/pair/window and calculate net buys - sells
+  // What: Group swaps by wallet/pair and calculate net buys - sells
   // Why: Identifies wash trading where users offset their own trades
   // How: calculateDirectionalNetting() groups swaps and returns net volumes
-  //      Example: $100 buy + $80 sell = $20 net
+  //      Example: $100 buy + $80 sell = $20 net (regardless of timing)
 
   const netVolumes = calculateDirectionalNetting(afterRoundTripRemoval);
 
