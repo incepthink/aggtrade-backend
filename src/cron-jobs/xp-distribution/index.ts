@@ -286,10 +286,10 @@ export const disrtibuteXPJob = async (
 // )
 
 // ============================================================================
-// WEEK: 2025-12-22 to 2025-12-29 (NEXT DISTRIBUTION)
+// WEEK: 2025-12-29 to 2026-01-05 (NEXT DISTRIBUTION)
 // ============================================================================
-// Run for all wallets in the week 2025-12-22 to 2025-12-29:
+// Run for all wallets in the week 2025-12-29 to 2026-01-05:
 disrtibuteXPJob({
-    weekStart: new Date('2025-12-22T00:00:00Z'),
-    weekEnd: new Date('2025-12-29T00:00:00Z')
+    weekStart: new Date('2025-12-29T00:00:00Z'),
+    weekEnd: new Date('2026-01-05T00:00:00Z')
 })
