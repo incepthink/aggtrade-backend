@@ -8,20 +8,20 @@ import type { FullSwapData } from '../utils/katana/types';
 
 /**
  * Backfill script for populating sushiswap_activity table with historical swap data
- * Date range: November 3-30, 2025
+ * Date range: December 1-31, 2025
  * Volume-based selection with daily caps:
- * - Nov 3-5: $1,300 USD/day
- * - Nov 6-7: $6,500 USD/day
- * - Nov 8-10: $33,000 USD/day
- * - Nov 11-15: $40,000 USD/day (ramp: 33K-47K)
- * - Nov 16-20: $53,000 USD/day (ramp: 47K-60K)
- * - Nov 21-30: $67,000 USD/day (peak: 53K-67K)
- * Target: ~$1.0M total volume (classic + limit combined)
+ * - Dec 1-5: $2,800 USD/day
+ * - Dec 6-10: $8,000 USD/day
+ * - Dec 11-15: $13,000 USD/day
+ * - Dec 16-20: $16,500 USD/day
+ * - Dec 21-25: $19,500 USD/day
+ * - Dec 26-31: $22,500 USD/day
+ * Target: ~$400K total volume (classic + limit combined)
  */
 
 const CHAIN_ID = 747474; // Katana/Ronin
-const START_DATE = new Date('2025-11-03T00:00:00Z');
-const END_DATE = new Date('2025-11-30T23:59:59Z');
+const START_DATE = new Date('2025-12-01T00:00:00Z');
+const END_DATE = new Date('2025-12-31T23:59:59Z');
 
 // Token addresses to search for top pools
 const COMMON_TOKENS = [
@@ -50,12 +50,12 @@ interface VolumeCap {
 }
 
 const VOLUME_CAPS: VolumeCap[] = [
-  { start: '2025-11-03', end: '2025-11-05', cap: 1300, variance: [0.5, 0.8] },
-  { start: '2025-11-06', end: '2025-11-07', cap: 6500, variance: [0.6, 0.95] },
-  { start: '2025-11-08', end: '2025-11-10', cap: 33000, variance: [0.6, 0.95] },
-  { start: '2025-11-11', end: '2025-11-15', cap: 40000, variance: [0.8, 1.0] }, // Ramp: 33-47K
-  { start: '2025-11-16', end: '2025-11-20', cap: 53000, variance: [0.9, 1.1] }, // Ramp: 47-60K
-  { start: '2025-11-21', end: '2025-11-30', cap: 67000, variance: [0.8, 1.0] }, // Peak: 53-67K
+  { start: '2025-12-01', end: '2025-12-05', cap: 2800, variance: [0.6, 0.9] },
+  { start: '2025-12-06', end: '2025-12-10', cap: 8000, variance: [0.7, 0.95] },
+  { start: '2025-12-11', end: '2025-12-15', cap: 13000, variance: [0.8, 1.0] },
+  { start: '2025-12-16', end: '2025-12-20', cap: 16500, variance: [0.85, 1.0] },
+  { start: '2025-12-21', end: '2025-12-25', cap: 19500, variance: [0.85, 1.0] },
+  { start: '2025-12-26', end: '2025-12-31', cap: 22500, variance: [0.9, 1.0] },
 ];
 
 const CLASSIC_RATIO = [0.60, 0.70]; // 60-70% of volume
