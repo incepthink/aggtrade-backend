@@ -7,6 +7,8 @@ import BotLimitOrder from './BotLimitOrder'
 import BotWallet from './BotWallet'
 import BotOrdersSimple from './BotOrdersSimple'
 import XpDistribution from './XpDistribution'
+import CronJobRun from './CronJobRun'
+import FailedBalanceQueue from './FailedBalanceQueue'
 
 const defineAssociations = () => {
   // BotWalletExecution <-> BotLimitOrder (one-to-many)
@@ -65,4 +67,4 @@ const defineAssociations = () => {
 
 defineAssociations()
 
-export { User, ReferralCode, Referral, KatanaSwap, BotWalletExecution, BotLimitOrder, BotWallet, BotOrdersSimple, XpDistribution }
+export { User, ReferralCode, Referral, KatanaSwap, BotWalletExecution, BotLimitOrder, BotWallet, BotOrdersSimple, XpDistribution, CronJobRun, FailedBalanceQueue }

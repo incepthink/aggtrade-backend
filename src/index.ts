@@ -5,6 +5,7 @@ import { connectDB } from "./mongodb.js";
 import dotenv from "dotenv";
 import sequelize from "./utils/db/sequelize"
 import "./models/index.js" // Load model associations
+import { performStartupGapDetection } from "./services/startupGapDetection.js"
 
 async function bootstrap() {
   dotenv.config();
@@ -20,6 +21,9 @@ async function bootstrap() {
     await connectDB(MONGO_URI);
 
     await Moralis.start({ apiKey: process.env.MORALIS_API! });
+
+    // Run startup gap detection (auto-backfill if needed)
+    await performStartupGapDetection();
 
     const app = createApp();
     app.listen(PORT, () =>

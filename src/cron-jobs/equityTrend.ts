@@ -5,9 +5,31 @@ import calculateCumulatedValue from "./utils/yearnfiBalance";
 import User from "../models/User";
 import BalanceHistory from "../models/BalanceHistory";
 import { KatanaLogger, generateCorrelationId } from "../utils/logger";
+import CronJobRun from "../models/CronJobRun";
+import FailedBalanceQueue from "../models/FailedBalanceQueue";
+
+// Type definitions for update results
+type UpdateResult = {
+  success: boolean;
+  walletAddress: string;
+  userId: number;
+  skipped?: boolean;
+  balance?: number;
+  error?: string;
+  retried?: boolean;
+  abandoned?: boolean;
+  willRetry?: boolean;
+};
+
+// Helper function to get current scheduled time (round to 4-hour marks: 0, 4, 8, 12, 16, 20)
+function getCurrentScheduledTime(): Date {
+  const now = new Date()
+  const hour = Math.floor(now.getHours() / 4) * 4
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, 0, 0, 0)
+}
 
 // Function to update balance for a single user
-async function updateUserBalance(userId: number, walletAddress: string) {
+async function updateUserBalance(userId: number, walletAddress: string): Promise<UpdateResult> {
   // Generate correlation ID for tracking this user's processing
   const correlationId = generateCorrelationId();
   const prefix = `[EquityTrend:${correlationId}]`;
@@ -27,7 +49,7 @@ async function updateUserBalance(userId: number, walletAddress: string) {
         walletAddress: walletAddress.substring(0, 10) + "...",
         correlationId
       });
-      return { success: true, walletAddress, skipped: true };
+      return { success: true, walletAddress, skipped: true, userId };
     }
 
     // Fetch ETH balance, Yearn vaults balance, and ERC20 balance in parallel
@@ -97,24 +119,67 @@ async function updateUserBalance(userId: number, walletAddress: string) {
       correlationId
     });
 
-    return { success: true, walletAddress, balance: totalBalanceUSD, skipped: false };
+    return { success: true, walletAddress, balance: totalBalanceUSD, skipped: false, userId };
   } catch (error: any) {
     KatanaLogger.error(prefix, "Failed to update user balance", error, {
       walletAddress: walletAddress.substring(0, 10) + "...",
       correlationId
     });
-    return { success: false, walletAddress, error: error?.message };
+    return { success: false, walletAddress, error: error?.message, userId };
   }
 }
 
+// Function to process retry queue
+async function processRetryQueue(cronRunId: number): Promise<UpdateResult[]> {
+  const prefix = "[RetryQueue]";
+
+  const retriableUsers = await FailedBalanceQueue.getRetriableUsers();
+
+  if (retriableUsers.length === 0) {
+    return [];
+  }
+
+  KatanaLogger.info(prefix, `Processing ${retriableUsers.length} users from retry queue`);
+
+  const results = [];
+
+  for (const queueEntry of retriableUsers) {
+    await FailedBalanceQueue.markRetrying(queueEntry.id);
+
+    const result = await updateUserBalance(queueEntry.user_id, queueEntry.wallet_address);
+
+    if (result.success && !result.skipped) {
+      await FailedBalanceQueue.markSuccess(queueEntry.id);
+      KatanaLogger.info(prefix, `Retry successful for user ${queueEntry.user_id}`);
+      results.push({ ...result, retried: true });
+    } else if (queueEntry.retry_count >= queueEntry.max_retries - 1) {
+      await FailedBalanceQueue.markAbandoned(queueEntry.id);
+      KatanaLogger.warn(prefix, `User ${queueEntry.user_id} abandoned after max retries`);
+      results.push({ ...result, abandoned: true });
+    } else {
+      await FailedBalanceQueue.incrementRetry(queueEntry.id);
+      results.push({ ...result, willRetry: true });
+    }
+
+    // Small delay between retries
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+
+  return results;
+}
+
 // Main cron job function
-async function runEquityTrendUpdate() {
+export async function runEquityTrendUpdate() {
   const startTime = Date.now();
   const prefix = "[EquityTrendCron]";
+  const scheduledTime = getCurrentScheduledTime();
 
   KatanaLogger.info(prefix, "Starting equity trend update", {
+    scheduledTime: scheduledTime.toISOString(),
     timestamp: new Date().toISOString()
   });
+
+  let cronRun;
 
   try {
     // Get all active users from database
@@ -125,11 +190,18 @@ async function runEquityTrendUpdate() {
       return;
     }
 
+    // Create cron run record
+    cronRun = await CronJobRun.createRun('equity_trend_update', scheduledTime, activeUsers.length);
+
     KatanaLogger.info(prefix, "Retrieved active users", {
-      totalUsers: activeUsers.length
+      totalUsers: activeUsers.length,
+      cronRunId: cronRun.id
     });
 
-    // Process all users with rate limiting (batch of 2 at a time to respect Etherscan 5 calls/sec limit)
+    // STEP 1: Process retry queue first
+    const retryResults = await processRetryQueue(cronRun.id);
+
+    // STEP 2: Process regular active users (same as before)
     const batchSize = 2;
     const results = [];
     const totalBatches = Math.ceil(activeUsers.length / batchSize);
@@ -138,7 +210,6 @@ async function runEquityTrendUpdate() {
       const batch = activeUsers.slice(i, i + batchSize);
       const batchNum = Math.floor(i / batchSize) + 1;
 
-      // Only log progress every 5 batches to reduce log spam
       if (batchNum % 5 === 1 || batchNum === totalBatches) {
         KatanaLogger.progress(prefix, batchNum, totalBatches, {
           batchNumber: batchNum
@@ -153,32 +224,53 @@ async function runEquityTrendUpdate() {
 
       results.push(...batchResults);
 
-      // Add delay between batches to stay under Etherscan rate limit (5 calls/sec)
       if (i + batchSize < activeUsers.length) {
-        await new Promise((resolve) => setTimeout(resolve, 5000)); // 5 second delay
+        await new Promise((resolve) => setTimeout(resolve, 5000));
       }
     }
 
-    // Calculate statistics
-    const successful = results.filter((r) => r.success && !r.skipped).length;
-    const skipped = results.filter((r) => r.success && r.skipped).length;
-    const failed = results.filter((r) => !r.success).length;
-    const failedUsers = results.filter((r) => !r.success).map(r => r.walletAddress.substring(0, 10) + "...");
+    // STEP 3: Combine results
+    const allResults = [...retryResults, ...results];
+
+    // STEP 4: Add failed users to retry queue
+    const failedUsers = allResults.filter(r => !r.success && !r.skipped && !r.abandoned);
+
+    for (const failed of failedUsers) {
+      await FailedBalanceQueue.addToQueue(
+        failed.userId,
+        failed.walletAddress,
+        cronRun.id,
+        failed.error || 'Unknown error'
+      );
+    }
+
+    // STEP 5: Calculate statistics
+    const successful = allResults.filter((r) => r.success && !r.skipped).length;
+    const skipped = allResults.filter((r) => r.success && r.skipped).length;
+    const failed = failedUsers.length;
+    const retriedSuccess = retryResults.filter(r => r.success && r.retried).length;
+
+    // STEP 6: Update cron run record with final stats
+    await CronJobRun.updateRunStatus(cronRun.id, 'completed', {
+      successful_users: successful,
+      skipped_users: skipped,
+      failed_users: failed,
+      duration_ms: Date.now() - startTime
+    });
 
     // Performance logging
     KatanaLogger.performance(prefix, "equity_trend_update", startTime, {
       totalUsers: activeUsers.length,
       successful,
       skipped,
-      failed
+      failed,
+      retriedSuccess,
+      cronRunId: cronRun.id
     });
 
     // Log failed users if any
     if (failed > 0) {
-      KatanaLogger.warn(prefix, "Some users failed to update", {
-        failedCount: failed,
-        failedUsers: failedUsers.slice(0, 10) // Only log first 10
-      });
+      KatanaLogger.warn(prefix, `${failed} users failed, added to retry queue`);
     }
 
     KatanaLogger.info(prefix, "Equity trend update completed", {
@@ -186,11 +278,21 @@ async function runEquityTrendUpdate() {
       successful,
       skipped,
       failed,
-      successRate: `${((successful / activeUsers.length) * 100).toFixed(1)}%`
+      retriedSuccess,
+      successRate: `${((successful / activeUsers.length) * 100).toFixed(1)}%`,
+      cronRunId: cronRun.id
     });
 
   } catch (error: any) {
     KatanaLogger.error(prefix, "Fatal error in cron job", error);
+
+    // Update cron run as failed
+    if (cronRun) {
+      await CronJobRun.updateRunStatus(cronRun.id, 'failed', {
+        error_message: error.message,
+        duration_ms: Date.now() - startTime
+      });
+    }
   }
 }
 

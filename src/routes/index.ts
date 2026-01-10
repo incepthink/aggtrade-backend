@@ -7,6 +7,7 @@ import transactionRouter from "./transaction"
 import botRouter from "./bot"
 import xpRouter from "./xp"
 import hashcaseAnalyticsRouter from "./hashcase-analytics"
+import healthRouter from "./health"
 
 const initializeRoutes = (app: Application) => {
     app.use("/platform", platformRouter)
@@ -17,6 +18,7 @@ const initializeRoutes = (app: Application) => {
     app.use("/bot", botRouter)
     app.use("/xp", xpRouter)
     app.use("/hashcase-analytics", hashcaseAnalyticsRouter)
+    app.use("/health", healthRouter)
 }
 
 export default initializeRoutes;
