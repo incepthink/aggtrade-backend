@@ -124,86 +124,83 @@ export async function getErc20BalanceUSD(walletAddress: string): Promise<number 
     let totalUSD = 0;
     let hasAnyFailure = false; // Track if any token fails
 
-    // Fetch balances and prices in parallel
-    const balancePromises = tokenAddresses.map(async (tokenAddress) => {
+    // Process tokens sequentially to avoid rate limiting
+    // This is slower but more reliable and avoids overwhelming the API
+    for (const tokenAddress of tokenAddresses) {
       try {
         const lowerCaseAddress = tokenAddress.toLowerCase();
 
         // Skip ETH placeholder address
         if (lowerCaseAddress === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
-          return { success: true, value: 0 };
+          continue;
         }
 
         // Get decimals for the token
         const decimals = decimalsMap.get(lowerCaseAddress) || 18;
 
-        // Fetch balance with retry, and price in parallel (5 retries for rate limit resilience)
-        const [balanceWei, price] = await Promise.all([
-          retryWithBackoff(
-            async () => {
-              const res = await axios.get(
-                `https://api.etherscan.io/v2/api?chainid=747474&module=account&action=tokenbalance&contractaddress=${tokenAddress}&address=${walletAddress}&tag=latest&apikey=${process.env.ETHERSCAN_API}`,
-                { timeout: 5000 }
-              );
+        // Fetch balance and price sequentially (5 retries for rate limit resilience)
+        const balanceWei = await retryWithBackoff(
+          async () => {
+            const res = await axios.get(
+              `https://api.etherscan.io/v2/api?chainid=747474&module=account&action=tokenbalance&contractaddress=${tokenAddress}&address=${walletAddress}&tag=latest&apikey=${process.env.ETHERSCAN_API}`,
+              { timeout: 5000 }
+            );
 
-              if (!res.data?.result) {
-                throw new Error('Invalid Etherscan response');
-              }
+            if (!res.data?.result) {
+              throw new Error('Invalid Etherscan response');
+            }
 
-              return res.data.result;
-            },
-            5,
-            1500,
-            `Token balance for ${tokenAddress.substring(0, 10)}...`
-          ),
-          getPriceSushi(tokenAddress)
-        ]);
+            return res.data.result;
+          },
+          5,
+          1500,
+          `Token balance for ${tokenAddress.substring(0, 10)}...`
+        );
 
         // If balance fetch failed after retries, mark as failure
         if (balanceWei === null) {
           console.warn(`[getErc20BalanceUSD] Failed to fetch balance for token ${tokenAddress}`);
-          return { success: false, value: 0 };
+          hasAnyFailure = true;
+          continue;
         }
 
         // Validate balance
         const balanceNum = validateNumber(balanceWei, `balance for ${tokenAddress}`);
         if (balanceNum === null) {
           console.warn(`[getErc20BalanceUSD] Invalid balance for token ${tokenAddress}`);
-          return { success: false, value: 0 };
+          hasAnyFailure = true;
+          continue;
         }
 
         // Convert to human readable format
         const balance = balanceNum / Math.pow(10, decimals);
 
+        // Fetch price
+        const price = await getPriceSushi(tokenAddress);
+
         // Validate price
         if (price === null || !isValidNumber(price)) {
           console.warn(`[getErc20BalanceUSD] Invalid price for token ${tokenAddress}, price: ${price}`);
-          return { success: false, value: 0 };
+          hasAnyFailure = true;
+          continue;
         }
 
         // Calculate USD value with safe multiplication
         const usdValue = safeMultiply(balance, price);
         if (usdValue === null) {
           console.warn(`[getErc20BalanceUSD] Invalid USD calculation for token ${tokenAddress}`);
-          return { success: false, value: 0 };
+          hasAnyFailure = true;
+          continue;
         }
 
-        return { success: true, value: usdValue };
+        totalUSD += usdValue;
+
+        // Add small delay between token processing to avoid rate limits (300ms)
+        await new Promise(resolve => setTimeout(resolve, 300));
       } catch (error) {
         console.error(`Error fetching balance/price for ${tokenAddress}:`, error);
-        return { success: false, value: 0 };
-      }
-    });
-
-    // Wait for all promises and check for failures
-    const results = await Promise.all(balancePromises);
-
-    // Check if any token failed and sum up values
-    for (const result of results) {
-      if (!result.success) {
         hasAnyFailure = true;
       }
-      totalUSD += result.value;
     }
 
     // If any token failed, return null to mark entire balance as failed

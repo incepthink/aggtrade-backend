@@ -7,6 +7,7 @@ import BalanceHistory from "../models/BalanceHistory";
 import { KatanaLogger, generateCorrelationId } from "../utils/logger";
 import CronJobRun from "../models/CronJobRun";
 import FailedBalanceQueue from "../models/FailedBalanceQueue";
+import { waitForRateLimitReset } from "./utils/validators";
 
 // Type definitions for update results
 type UpdateResult = {
@@ -144,6 +145,9 @@ async function processRetryQueue(cronRunId: number): Promise<UpdateResult[]> {
   const results = [];
 
   for (const queueEntry of retriableUsers) {
+    // Check and wait for rate limit reset before each retry
+    await waitForRateLimitReset();
+
     await FailedBalanceQueue.markRetrying(queueEntry.id);
 
     const result = await updateUserBalance(queueEntry.user_id, queueEntry.wallet_address);
@@ -161,8 +165,8 @@ async function processRetryQueue(cronRunId: number): Promise<UpdateResult[]> {
       results.push({ ...result, willRetry: true });
     }
 
-    // Small delay between retries
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    // Increase delay between retries to avoid rate limiting (6 seconds)
+    await new Promise(resolve => setTimeout(resolve, 6000));
   }
 
   return results;
@@ -201,14 +205,18 @@ export async function runEquityTrendUpdate() {
     // STEP 1: Process retry queue first
     const retryResults = await processRetryQueue(cronRun.id);
 
-    // STEP 2: Process regular active users (same as before)
-    const batchSize = 2;
+    // STEP 2: Process regular active users with rate limit awareness
+    // Reduce batch size to 1 to avoid overwhelming APIs with parallel requests
+    const batchSize = 1;
     const results = [];
     const totalBatches = Math.ceil(activeUsers.length / batchSize);
 
     for (let i = 0; i < activeUsers.length; i += batchSize) {
       const batch = activeUsers.slice(i, i + batchSize);
       const batchNum = Math.floor(i / batchSize) + 1;
+
+      // Check and wait for rate limit reset before processing each batch
+      await waitForRateLimitReset();
 
       if (batchNum % 5 === 1 || batchNum === totalBatches) {
         KatanaLogger.progress(prefix, batchNum, totalBatches, {
@@ -224,8 +232,10 @@ export async function runEquityTrendUpdate() {
 
       results.push(...batchResults);
 
+      // Add a delay between batches to avoid rate limiting
+      // Increase delay to 6 seconds to ensure rate limit windows reset
       if (i + batchSize < activeUsers.length) {
-        await new Promise((resolve) => setTimeout(resolve, 5000));
+        await new Promise((resolve) => setTimeout(resolve, 6000));
       }
     }
 

@@ -23,7 +23,7 @@ async function bootstrap() {
     await Moralis.start({ apiKey: process.env.MORALIS_API! });
 
     // Run startup gap detection (auto-backfill if needed)
-    await performStartupGapDetection();
+    // await performStartupGapDetection();
 
     const app = createApp();
     app.listen(PORT, () =>

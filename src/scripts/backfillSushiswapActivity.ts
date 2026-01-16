@@ -1,6 +1,7 @@
 // src/scripts/backfillSushiswapActivity.ts
 
 import sequelize from '../utils/db/sequelize';
+import { Op } from 'sequelize';
 import User from '../models/User';
 import SushiswapActivity from '../models/SushiswapActivity';
 import { fetchPoolsByTVL, fetchFullSwaps } from '../utils/katana/dataFetching';
@@ -8,20 +9,18 @@ import type { FullSwapData } from '../utils/katana/types';
 
 /**
  * Backfill script for populating sushiswap_activity table with historical swap data
- * Date range: December 1-31, 2025
- * Volume-based selection with daily caps:
- * - Dec 1-5: $2,800 USD/day
- * - Dec 6-10: $8,000 USD/day
- * - Dec 11-15: $13,000 USD/day
- * - Dec 16-20: $16,500 USD/day
- * - Dec 21-25: $19,500 USD/day
- * - Dec 26-31: $22,500 USD/day
- * Target: ~$400K total volume (classic + limit combined)
+ * Date range: December 2-16, 2025
+ * Volume-based selection: $25,000 - $50,000 USD/day
+ * Skips days that already have >= $50,000 volume
  */
 
 const CHAIN_ID = 747474; // Katana/Ronin
-const START_DATE = new Date('2025-12-01T00:00:00Z');
-const END_DATE = new Date('2025-12-31T23:59:59Z');
+const START_DATE = new Date('2025-12-02T00:00:00Z');
+const END_DATE = new Date('2025-12-16T23:59:59Z');
+
+// Volume limits for skip logic
+const MIN_DAILY_VOLUME = 25000;
+const MAX_DAILY_VOLUME = 50000;
 
 // Token addresses to search for top pools
 const COMMON_TOKENS = [
@@ -41,25 +40,30 @@ const COMMON_TOKENS = [
   "0x9b8df6e244526ab5f6e6400d331db28c8fdddb55", // uSOL
 ];
 
-// Volume cap configuration
-interface VolumeCap {
-  start: string;
-  end: string;
-  cap: number;
-  variance: [number, number];
-}
-
-const VOLUME_CAPS: VolumeCap[] = [
-  { start: '2025-12-01', end: '2025-12-05', cap: 2800, variance: [0.6, 0.9] },
-  { start: '2025-12-06', end: '2025-12-10', cap: 8000, variance: [0.7, 0.95] },
-  { start: '2025-12-11', end: '2025-12-15', cap: 13000, variance: [0.8, 1.0] },
-  { start: '2025-12-16', end: '2025-12-20', cap: 16500, variance: [0.85, 1.0] },
-  { start: '2025-12-21', end: '2025-12-25', cap: 19500, variance: [0.85, 1.0] },
-  { start: '2025-12-26', end: '2025-12-31', cap: 22500, variance: [0.9, 1.0] },
-];
-
 const CLASSIC_RATIO = [0.60, 0.70]; // 60-70% of volume
-const QUIET_DAY_CHANCE = 0.12; // 12% chance of quiet day (30-50% volume)
+
+/**
+ * Get existing volume for a specific date from the database
+ */
+async function getExistingDailyVolume(date: Date): Promise<number> {
+  const startOfDay = new Date(date);
+  startOfDay.setUTCHours(0, 0, 0, 0);
+
+  const endOfDay = new Date(date);
+  endOfDay.setUTCHours(23, 59, 59, 999);
+
+  const result = await SushiswapActivity.sum('usd_volume', {
+    where: {
+      chain_id: CHAIN_ID,
+      block_timestamp: {
+        [Op.gte]: startOfDay,
+        [Op.lte]: endOfDay,
+      },
+    },
+  });
+
+  return result || 0;
+}
 
 interface DailySwapSelection {
   date: string;
@@ -79,51 +83,6 @@ function shuffleArray<T>(array: T[]): T[] {
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
   return shuffled;
-}
-
-/**
- * Get volume cap configuration for a specific date
- */
-function getVolumeCap(date: Date): { cap: number; variance: [number, number] } {
-  const dateStr = date.toISOString().split('T')[0];
-
-  for (const config of VOLUME_CAPS) {
-    if (dateStr >= config.start && dateStr <= config.end) {
-      return { cap: config.cap, variance: config.variance };
-    }
-  }
-
-  // Default fallback (shouldn't happen with correct config)
-  return { cap: 100000, variance: [0.8, 1.0] };
-}
-
-/**
- * Determine if today should be a quiet day (random 12% chance)
- */
-function isQuietDay(): boolean {
-  return Math.random() < QUIET_DAY_CHANCE;
-}
-
-/**
- * Calculate target volume for a day with variance and quiet day adjustment
- */
-function calculateDailyTarget(
-  cap: number,
-  variance: [number, number],
-  isQuiet: boolean
-): number {
-  const [minVariance, maxVariance] = variance;
-  const randomVariance = minVariance + Math.random() * (maxVariance - minVariance);
-
-  let target = cap * randomVariance;
-
-  // If quiet day, reduce to 30-50% of calculated target
-  if (isQuiet) {
-    const quietMultiplier = 0.3 + Math.random() * 0.2; // 30-50%
-    target *= quietMultiplier;
-  }
-
-  return Math.round(target);
 }
 
 /**
@@ -375,22 +334,31 @@ async function backfillSushiswapActivity() {
 
     console.log('Daily Volume Distribution:');
     let runningTotal = 0;
+    let skippedDays = 0;
 
     for (const date of dates) {
-      // Get volume cap for this date
-      const { cap, variance } = getVolumeCap(date);
+      const dateStr = date.toISOString().split('T')[0];
 
-      // Check if quiet day
-      const quiet = isQuietDay();
+      // Check existing volume in database
+      const existingVolume = await getExistingDailyVolume(date);
 
-      // Calculate target volume for the day
-      const targetVolume = calculateDailyTarget(cap, variance, quiet);
+      // Skip if existing volume is already in the target range (>= 25k) or exceeds it
+      if (existingVolume >= MIN_DAILY_VOLUME) {
+        console.log(`  ${dateStr}: SKIPPED - Existing volume $${Math.round(existingVolume).toLocaleString()} already >= $${MIN_DAILY_VOLUME.toLocaleString()}`);
+        skippedDays++;
+        continue;
+      }
+
+      // Generate a random total target for this day between 25k-50k
+      const dailyTotalTarget = MIN_DAILY_VOLUME + Math.random() * (MAX_DAILY_VOLUME - MIN_DAILY_VOLUME);
+
+      // Calculate how much we need to add to reach the target
+      let targetVolume = dailyTotalTarget - existingVolume;
 
       // Get swaps for this day
       const daySwaps = filterSwapsByDate(allSwaps, date);
 
       if (daySwaps.length === 0) {
-        const dateStr = date.toISOString().split('T')[0];
         console.log(`  ${dateStr}: No swaps available (skipped)`);
         continue;
       }
@@ -407,7 +375,6 @@ async function backfillSushiswapActivity() {
         classicRatio
       );
 
-      const dateStr = date.toISOString().split('T')[0];
       dailySelections.push({
         date: dateStr,
         targetVolume,
@@ -418,11 +385,16 @@ async function backfillSushiswapActivity() {
 
       runningTotal += actualVolume;
 
-      const quietLabel = quiet ? ' [QUIET DAY]' : '';
+      const dayTotal = existingVolume + actualVolume;
+      const existingLabel = existingVolume > 0 ? ` | Existing: $${Math.round(existingVolume).toLocaleString()}` : '';
       console.log(
-        `  ${dateStr}: Target $${targetVolume.toLocaleString()} → $${Math.round(actualVolume).toLocaleString()} ` +
-        `(${classic.length} CLASSIC, ${limit.length} LIMIT)${quietLabel} | Running: $${Math.round(runningTotal).toLocaleString()}`
+        `  ${dateStr}: Day Target $${Math.round(dailyTotalTarget).toLocaleString()} | Adding $${Math.round(actualVolume).toLocaleString()} ` +
+        `(${classic.length} CLASSIC, ${limit.length} LIMIT)${existingLabel} | Day Total: $${Math.round(dayTotal).toLocaleString()}`
       );
+    }
+
+    if (skippedDays > 0) {
+      console.log(`\n✓ Skipped ${skippedDays} days that already had >= $${MIN_DAILY_VOLUME.toLocaleString()} volume`);
     }
 
     // Calculate totals

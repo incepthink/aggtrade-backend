@@ -25,6 +25,34 @@ function isRateLimitError(error: any): boolean {
   );
 }
 
+// Global rate limit state management
+let globalRateLimitDetected = false;
+let globalRateLimitResetTime = 0;
+
+/**
+ * Mark that a global rate limit was hit and set reset time
+ */
+export function markGlobalRateLimit(): void {
+  globalRateLimitDetected = true;
+  // Rate limit window is 1 second, so wait 2 seconds to be safe
+  globalRateLimitResetTime = Date.now() + 2000;
+  console.warn('[RateLimit] Global rate limit detected, pausing all requests for 2 seconds');
+}
+
+/**
+ * Check if we should wait for global rate limit to reset
+ */
+export async function waitForRateLimitReset(): Promise<void> {
+  if (globalRateLimitDetected) {
+    const waitTime = Math.max(0, globalRateLimitResetTime - Date.now());
+    if (waitTime > 0) {
+      console.log(`[RateLimit] Waiting ${waitTime}ms for rate limit to reset`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+    globalRateLimitDetected = false;
+  }
+}
+
 /**
  * Retry utility with exponential backoff for API calls
  * Includes intelligent rate limit detection and handling
@@ -42,13 +70,20 @@ export async function retryWithBackoff<T>(
 ): Promise<T | null> {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
+      // Wait for global rate limit to reset before attempting
+      await waitForRateLimitReset();
+
       return await fn();
     } catch (error: any) {
       const isRateLimit = isRateLimitError(error);
 
-      // For rate limit errors, use extended retries with longer delays
+      // For rate limit errors, mark global rate limit and use extended retries
       if (isRateLimit) {
-        const rateLimitDelay = 2000 * Math.pow(2, attempt); // Start at 2s, then 4s, 8s...
+        markGlobalRateLimit();
+
+        // For rate limits, wait longer and use exponential backoff
+        // Start at 3s (to allow rate limit window to reset), then 6s, 12s...
+        const rateLimitDelay = 3000 * Math.pow(2, attempt);
 
         if (attempt < maxRetries - 1) {
           console.log(`[Retry] ${operationName} hit rate limit (attempt ${attempt + 1}/${maxRetries}), waiting ${rateLimitDelay}ms before retry`);
@@ -60,7 +95,7 @@ export async function retryWithBackoff<T>(
       // Last attempt - check if we should fail or continue
       if (attempt === maxRetries - 1) {
         if (isRateLimit) {
-          console.warn(`[Retry] ${operationName} failed due to rate limit after ${maxRetries} attempts. This may succeed in next batch.`);
+          console.warn(`[Retry] ${operationName} failed due to rate limit after ${maxRetries} attempts. Will retry in next cron run.`);
         } else {
           console.warn(`[Retry] ${operationName} failed after ${maxRetries} attempts:`, error?.message);
         }
