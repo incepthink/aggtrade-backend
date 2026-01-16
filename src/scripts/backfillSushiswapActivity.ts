@@ -9,16 +9,28 @@ import type { FullSwapData } from '../utils/katana/types';
 
 /**
  * Backfill script for populating sushiswap_activity table with historical swap data
- * Date range: December 2-23, 2025
+ * Date range: December 2, 2025 - January 15, 2026
  * Volume-based selection:
  * - Dec 2-16: $25,000 - $50,000 USD/day
  * - Dec 17-23: $60,000 - $80,000 USD/day
+ * - Dec 24 - Jan 15: $85,000 - $130,000 USD/day
+ *   - Normal days: $90,000 - $105,000 (centered around ~100k)
+ *   - High volume days (Dec 24, 25, 28, Jan 6, 9): $115,000 - $130,000
  * Skips days that already have >= minimum volume for that period
  */
 
 const CHAIN_ID = 747474; // Katana/Ronin
 const START_DATE = new Date('2025-12-02T00:00:00Z');
-const END_DATE = new Date('2025-12-23T23:59:59Z');
+const END_DATE = new Date('2026-01-15T23:59:59Z');
+
+// High volume days (get higher range within the period)
+const HIGH_VOLUME_DAYS = [
+  '2025-12-24',
+  '2025-12-25',
+  '2025-12-28',
+  '2026-01-06',
+  '2026-01-09',
+];
 
 // Volume ranges by date period
 interface VolumeRange {
@@ -26,11 +38,15 @@ interface VolumeRange {
   endDate: string;
   min: number;
   max: number;
+  highMin?: number;  // For high volume days
+  highMax?: number;
 }
 
 const VOLUME_RANGES: VolumeRange[] = [
   { startDate: '2025-12-02', endDate: '2025-12-16', min: 25000, max: 50000 },
   { startDate: '2025-12-17', endDate: '2025-12-23', min: 60000, max: 80000 },
+  // Normal days: 90k-105k (most will be ~100k), High volume days: 115k-130k
+  { startDate: '2025-12-24', endDate: '2026-01-15', min: 90000, max: 105000, highMin: 115000, highMax: 130000 },
 ];
 
 /**
@@ -38,9 +54,14 @@ const VOLUME_RANGES: VolumeRange[] = [
  */
 function getVolumeRangeForDate(date: Date): { min: number; max: number } {
   const dateStr = date.toISOString().split('T')[0];
+  const isHighVolumeDay = HIGH_VOLUME_DAYS.includes(dateStr);
 
   for (const range of VOLUME_RANGES) {
     if (dateStr >= range.startDate && dateStr <= range.endDate) {
+      // Use high volume range if it's a special day and high range is defined
+      if (isHighVolumeDay && range.highMin && range.highMax) {
+        return { min: range.highMin, max: range.highMax };
+      }
       return { min: range.min, max: range.max };
     }
   }
@@ -418,8 +439,9 @@ async function backfillSushiswapActivity() {
       const dayTotal = existingVolume + actualVolume;
       const existingLabel = existingVolume > 0 ? ` | Existing: $${Math.round(existingVolume).toLocaleString()}` : '';
       const rangeLabel = `[${(minVolume/1000).toFixed(0)}k-${(maxVolume/1000).toFixed(0)}k]`;
+      const highVolumeLabel = HIGH_VOLUME_DAYS.includes(dateStr) ? ' [HIGH]' : '';
       console.log(
-        `  ${dateStr} ${rangeLabel}: Target $${Math.round(dailyTotalTarget).toLocaleString()} | Adding $${Math.round(actualVolume).toLocaleString()} ` +
+        `  ${dateStr} ${rangeLabel}${highVolumeLabel}: Target $${Math.round(dailyTotalTarget).toLocaleString()} | Adding $${Math.round(actualVolume).toLocaleString()} ` +
         `(${classic.length} CLASSIC, ${limit.length} LIMIT)${existingLabel} | Day Total: $${Math.round(dayTotal).toLocaleString()}`
       );
     }
