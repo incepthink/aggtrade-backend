@@ -9,19 +9,20 @@ import type { FullSwapData } from '../utils/katana/types';
 
 /**
  * Backfill script for populating sushiswap_activity table with historical swap data
- * Date range: December 2, 2025 - January 15, 2026
+ * Date range: December 2, 2025 - January 16, 2026
  * Volume-based selection:
  * - Dec 2-16: $25,000 - $50,000 USD/day
  * - Dec 17-23: $60,000 - $80,000 USD/day
  * - Dec 24 - Jan 15: $85,000 - $130,000 USD/day
  *   - Normal days: $90,000 - $105,000 (centered around ~100k)
  *   - High volume days (Dec 24, 25, 28, Jan 6, 9): $115,000 - $130,000
+ * - Jan 16: $60,000 (fixed - partial day)
  * Skips days that already have >= minimum volume for that period
  */
 
 const CHAIN_ID = 747474; // Katana/Ronin
 const START_DATE = new Date('2025-12-02T00:00:00Z');
-const END_DATE = new Date('2026-01-15T23:59:59Z');
+const END_DATE = new Date('2026-01-16T23:59:59Z');
 
 // High volume days (get higher range within the period)
 const HIGH_VOLUME_DAYS = [
@@ -31,6 +32,11 @@ const HIGH_VOLUME_DAYS = [
   '2026-01-06',
   '2026-01-09',
 ];
+
+// Fixed volume days (exact target, not a range)
+const FIXED_VOLUME_DAYS: Record<string, number> = {
+  '2026-01-16': 60000,  // Today - partial day
+};
 
 // Volume ranges by date period
 interface VolumeRange {
@@ -51,9 +57,17 @@ const VOLUME_RANGES: VolumeRange[] = [
 
 /**
  * Get volume range for a specific date
+ * Returns { min, max, fixed } - if fixed is set, use that exact value
  */
-function getVolumeRangeForDate(date: Date): { min: number; max: number } {
+function getVolumeRangeForDate(date: Date): { min: number; max: number; fixed?: number } {
   const dateStr = date.toISOString().split('T')[0];
+
+  // Check for fixed volume days first
+  if (FIXED_VOLUME_DAYS[dateStr]) {
+    const fixedVolume = FIXED_VOLUME_DAYS[dateStr];
+    return { min: fixedVolume, max: fixedVolume, fixed: fixedVolume };
+  }
+
   const isHighVolumeDay = HIGH_VOLUME_DAYS.includes(dateStr);
 
   for (const range of VOLUME_RANGES) {
@@ -388,7 +402,7 @@ async function backfillSushiswapActivity() {
       const dateStr = date.toISOString().split('T')[0];
 
       // Get volume range for this date
-      const { min: minVolume, max: maxVolume } = getVolumeRangeForDate(date);
+      const { min: minVolume, max: maxVolume, fixed: fixedVolume } = getVolumeRangeForDate(date);
 
       // Check existing volume in database
       const existingVolume = await getExistingDailyVolume(date);
@@ -400,8 +414,8 @@ async function backfillSushiswapActivity() {
         continue;
       }
 
-      // Generate a random total target for this day within the volume range
-      const dailyTotalTarget = minVolume + Math.random() * (maxVolume - minVolume);
+      // Use fixed volume if specified, otherwise generate random target within range
+      const dailyTotalTarget = fixedVolume ?? (minVolume + Math.random() * (maxVolume - minVolume));
 
       // Calculate how much we need to add to reach the target
       let targetVolume = dailyTotalTarget - existingVolume;
@@ -438,7 +452,9 @@ async function backfillSushiswapActivity() {
 
       const dayTotal = existingVolume + actualVolume;
       const existingLabel = existingVolume > 0 ? ` | Existing: $${Math.round(existingVolume).toLocaleString()}` : '';
-      const rangeLabel = `[${(minVolume/1000).toFixed(0)}k-${(maxVolume/1000).toFixed(0)}k]`;
+      const rangeLabel = fixedVolume
+        ? `[${(fixedVolume/1000).toFixed(0)}k FIXED]`
+        : `[${(minVolume/1000).toFixed(0)}k-${(maxVolume/1000).toFixed(0)}k]`;
       const highVolumeLabel = HIGH_VOLUME_DAYS.includes(dateStr) ? ' [HIGH]' : '';
       console.log(
         `  ${dateStr} ${rangeLabel}${highVolumeLabel}: Target $${Math.round(dailyTotalTarget).toLocaleString()} | Adding $${Math.round(actualVolume).toLocaleString()} ` +
