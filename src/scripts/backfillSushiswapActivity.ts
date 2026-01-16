@@ -9,18 +9,45 @@ import type { FullSwapData } from '../utils/katana/types';
 
 /**
  * Backfill script for populating sushiswap_activity table with historical swap data
- * Date range: December 2-16, 2025
- * Volume-based selection: $25,000 - $50,000 USD/day
- * Skips days that already have >= $50,000 volume
+ * Date range: December 2-23, 2025
+ * Volume-based selection:
+ * - Dec 2-16: $25,000 - $50,000 USD/day
+ * - Dec 17-23: $60,000 - $80,000 USD/day
+ * Skips days that already have >= minimum volume for that period
  */
 
 const CHAIN_ID = 747474; // Katana/Ronin
 const START_DATE = new Date('2025-12-02T00:00:00Z');
-const END_DATE = new Date('2025-12-16T23:59:59Z');
+const END_DATE = new Date('2025-12-23T23:59:59Z');
 
-// Volume limits for skip logic
-const MIN_DAILY_VOLUME = 25000;
-const MAX_DAILY_VOLUME = 50000;
+// Volume ranges by date period
+interface VolumeRange {
+  startDate: string;
+  endDate: string;
+  min: number;
+  max: number;
+}
+
+const VOLUME_RANGES: VolumeRange[] = [
+  { startDate: '2025-12-02', endDate: '2025-12-16', min: 25000, max: 50000 },
+  { startDate: '2025-12-17', endDate: '2025-12-23', min: 60000, max: 80000 },
+];
+
+/**
+ * Get volume range for a specific date
+ */
+function getVolumeRangeForDate(date: Date): { min: number; max: number } {
+  const dateStr = date.toISOString().split('T')[0];
+
+  for (const range of VOLUME_RANGES) {
+    if (dateStr >= range.startDate && dateStr <= range.endDate) {
+      return { min: range.min, max: range.max };
+    }
+  }
+
+  // Default fallback
+  return { min: 25000, max: 50000 };
+}
 
 // Token addresses to search for top pools
 const COMMON_TOKENS = [
@@ -339,18 +366,21 @@ async function backfillSushiswapActivity() {
     for (const date of dates) {
       const dateStr = date.toISOString().split('T')[0];
 
+      // Get volume range for this date
+      const { min: minVolume, max: maxVolume } = getVolumeRangeForDate(date);
+
       // Check existing volume in database
       const existingVolume = await getExistingDailyVolume(date);
 
-      // Skip if existing volume is already in the target range (>= 25k) or exceeds it
-      if (existingVolume >= MIN_DAILY_VOLUME) {
-        console.log(`  ${dateStr}: SKIPPED - Existing volume $${Math.round(existingVolume).toLocaleString()} already >= $${MIN_DAILY_VOLUME.toLocaleString()}`);
+      // Skip if existing volume is already in the target range (>= min) or exceeds it
+      if (existingVolume >= minVolume) {
+        console.log(`  ${dateStr}: SKIPPED - Existing volume $${Math.round(existingVolume).toLocaleString()} already >= $${minVolume.toLocaleString()}`);
         skippedDays++;
         continue;
       }
 
-      // Generate a random total target for this day between 25k-50k
-      const dailyTotalTarget = MIN_DAILY_VOLUME + Math.random() * (MAX_DAILY_VOLUME - MIN_DAILY_VOLUME);
+      // Generate a random total target for this day within the volume range
+      const dailyTotalTarget = minVolume + Math.random() * (maxVolume - minVolume);
 
       // Calculate how much we need to add to reach the target
       let targetVolume = dailyTotalTarget - existingVolume;
@@ -387,14 +417,15 @@ async function backfillSushiswapActivity() {
 
       const dayTotal = existingVolume + actualVolume;
       const existingLabel = existingVolume > 0 ? ` | Existing: $${Math.round(existingVolume).toLocaleString()}` : '';
+      const rangeLabel = `[${(minVolume/1000).toFixed(0)}k-${(maxVolume/1000).toFixed(0)}k]`;
       console.log(
-        `  ${dateStr}: Day Target $${Math.round(dailyTotalTarget).toLocaleString()} | Adding $${Math.round(actualVolume).toLocaleString()} ` +
+        `  ${dateStr} ${rangeLabel}: Target $${Math.round(dailyTotalTarget).toLocaleString()} | Adding $${Math.round(actualVolume).toLocaleString()} ` +
         `(${classic.length} CLASSIC, ${limit.length} LIMIT)${existingLabel} | Day Total: $${Math.round(dayTotal).toLocaleString()}`
       );
     }
 
     if (skippedDays > 0) {
-      console.log(`\n✓ Skipped ${skippedDays} days that already had >= $${MIN_DAILY_VOLUME.toLocaleString()} volume`);
+      console.log(`\n✓ Skipped ${skippedDays} days that already had sufficient volume`);
     }
 
     // Calculate totals
