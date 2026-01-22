@@ -30,7 +30,7 @@ export const SWAP_RATIO_CONFIG = {
 
 // Backfill configuration
 export const BACKFILL_CONFIG = {
-  START_DATE: '2026-01-21',  // Start backfill from this date
+  START_DATE: '2026-01-17',  // Start backfill from this date
   // Backfill volume per day (no hourly distribution, just daily targets)
   BACKFILL_VOLUME_MIN: 95000,
   BACKFILL_VOLUME_MAX: 125000,
