@@ -8,6 +8,13 @@ import { startProactiveCandlesCron } from './updateProactiveCandlesJob'
 import { startGridBotOrchestrator } from './gridBot/gridBotOrchestrator'
 import { startClassicSwapBotCron, triggerClassicSwapBotManually } from './classicSwapBot'
 import { startBotLogCleanupCron } from './cleanupBotLogs'
+import {
+  startVolumeSushiswapActivityCron,
+  triggerBackfill as triggerVolumeBackfill,
+  triggerCatchup as triggerVolumeCatchup,
+  triggerCurrentHour as triggerVolumeCurrentHour,
+  getVolumeStatus,
+} from './volume-sushiswapActivity'
 
 /**
  * Initialize all cron jobs
@@ -36,6 +43,10 @@ export function initializeCronJobs() {
   // Start bot log cleanup (daily)
   startBotLogCleanupCron()
 
+  // Start volume sushiswap activity cron (hourly)
+  // Handles backfill, catchup, and hourly volume distribution
+  startVolumeSushiswapActivityCron()
+
   console.log('[Cron Jobs] All cron jobs initialized successfully\n')
 }
 
@@ -45,5 +56,11 @@ initializeCronJobs()
 export {
   startGridBotOrchestrator,
   startClassicSwapBotCron,
-  triggerClassicSwapBotManually
+  triggerClassicSwapBotManually,
+  // Volume sushiswap activity
+  startVolumeSushiswapActivityCron,
+  triggerVolumeBackfill,
+  triggerVolumeCatchup,
+  triggerVolumeCurrentHour,
+  getVolumeStatus,
 }

@@ -15,7 +15,8 @@
       "Bash(npm view:*)",
       "Bash(npm install:*)",
       "Bash(bun build:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "mcp__ide__getDiagnostics"
     ],
     "deny": [],
     "ask": []
