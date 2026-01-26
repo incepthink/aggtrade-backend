@@ -8,6 +8,7 @@ import BotWallet from '../../../models/BotWallet'
 import { KatanaLogger } from '../../../utils/logger'
 import sequelize from '../../../utils/db/sequelize'
 import { Transaction } from 'sequelize'
+import { MNEMONIC_CONFIG, getTradingPoolForWallet } from '../config'
 
 const PREFIX = '[WalletService]'
 
@@ -18,19 +19,70 @@ export interface WalletWithSigner {
   tradingPool: string
 }
 
+// Mnemonic holder (loaded from AWS Secrets Manager or env)
+// SECURITY: Cleared after wallets are derived
+let _mnemonic: string | null = null
+
 export class WalletService {
   /**
-   * Load wallet from environment and create signer
+   * Set the mnemonic (used when loading from AWS Secrets Manager)
+   * SECURITY: Do not log the mnemonic
+   */
+  static setMnemonic(mnemonic: string): void {
+    _mnemonic = mnemonic
+  }
+
+  /**
+   * Clear the mnemonic from memory
+   * SECURITY: Call this after wallets are derived
+   */
+  static clearMnemonic(): void {
+    _mnemonic = null
+  }
+
+  /**
+   * Get the current mnemonic (from memory or env)
+   */
+  static getMnemonic(): string | null {
+    return _mnemonic || process.env.BOT_MNEMONIC || null
+  }
+
+  /**
+   * Load wallet from mnemonic or env private key and create signer
+   * SECURITY: No sensitive data is logged
    */
   static loadWalletWithSigner(
     walletIndex: number,
     provider: ethers.Provider
   ): WalletWithSigner | null {
+    const mnemonic = this.getMnemonic()
+
+    // Try mnemonic-based derivation first
+    if (mnemonic) {
+      try {
+        const hdNode = ethers.HDNodeWallet.fromPhrase(mnemonic)
+        const derivedWallet = hdNode.deriveChild(walletIndex)
+        const wallet = new ethers.Wallet(derivedWallet.privateKey, provider)
+        const tradingPool = getTradingPoolForWallet(walletIndex)
+
+        return {
+          address: wallet.address,
+          index: walletIndex,
+          signer: wallet,
+          tradingPool
+        }
+      } catch (error) {
+        KatanaLogger.error(PREFIX, `Failed to derive wallet ${walletIndex}`)
+        return null
+      }
+    }
+
+    // Fallback to individual private key
     const envKey = `WALLET_${walletIndex}`
     const privateKey = process.env[envKey]
 
     if (!privateKey) {
-      KatanaLogger.warn(PREFIX, `${envKey} not found in environment`)
+      KatanaLogger.warn(PREFIX, `No key found for wallet ${walletIndex}`)
       return null
     }
 
@@ -44,9 +96,53 @@ export class WalletService {
         tradingPool: ''
       }
     } catch (error) {
-      KatanaLogger.error(PREFIX, `Failed to load ${envKey}`, error)
+      KatanaLogger.error(PREFIX, `Failed to load wallet ${walletIndex}`)
       return null
     }
+  }
+
+  /**
+   * Load all wallets from mnemonic
+   * Returns array of WalletWithSigner for each configured wallet
+   * SECURITY: Mnemonic is never logged
+   */
+  static loadAllWalletsFromMnemonic(provider: ethers.Provider): WalletWithSigner[] {
+    const mnemonic = this.getMnemonic()
+
+    if (!mnemonic) {
+      KatanaLogger.warn(PREFIX, 'No mnemonic available')
+      return []
+    }
+
+    const wallets: WalletWithSigner[] = []
+    const walletCount = MNEMONIC_CONFIG.WALLET_COUNT
+
+    KatanaLogger.info(PREFIX, `Deriving ${walletCount} wallets...`)
+
+    try {
+      const hdNode = ethers.HDNodeWallet.fromPhrase(mnemonic)
+
+      for (let i = 0; i < walletCount; i++) {
+        const derivedWallet = hdNode.deriveChild(i)
+        const wallet = new ethers.Wallet(derivedWallet.privateKey, provider)
+        const tradingPool = getTradingPoolForWallet(i)
+
+        wallets.push({
+          address: wallet.address,
+          index: i,
+          signer: wallet,
+          tradingPool
+        })
+
+        KatanaLogger.info(PREFIX, `  Wallet ${i}: ${wallet.address.slice(0, 10)}... → ${tradingPool}`)
+      }
+
+      KatanaLogger.info(PREFIX, `Derived ${wallets.length} wallets`)
+    } catch (error) {
+      KatanaLogger.error(PREFIX, 'Failed to derive wallets')
+    }
+
+    return wallets
   }
 
   /**

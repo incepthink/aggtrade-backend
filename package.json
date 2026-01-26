@@ -19,6 +19,7 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.972.0",
     "@orbs-network/twap-sdk": "^4.0.92",
     "@types/node": "^24.0.7",
     "axios": "^1.10.0",

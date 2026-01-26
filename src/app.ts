@@ -14,7 +14,12 @@ export function createApp(): express.Express {
   const app = express();
 
   // ── global middleware ───────────────────────────────────────────
-  app.use(cors()); // allow all origins
+  app.use(cors({
+    origin: true, // reflect the request origin
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  }));
   app.use(express.json()); // parse JSON bodies
 
   app.get("/", (req, res) => {

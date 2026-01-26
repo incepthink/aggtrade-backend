@@ -175,3 +175,33 @@ export const REBALANCE_CONFIG = {
   MIN_SWAP_SIZE_USD: 5,           // Don't swap if amount < $5
   APPROVAL_CONFIRMATION_DELAY_MS: 3000  // Wait 3s after approval before swap to ensure confirmation
 }
+
+/**
+ * MNEMONIC WALLET CONFIGURATION
+ *
+ * Wallets are derived from a single mnemonic phrase (BOT_MNEMONIC env variable).
+ * Trading pools alternate between USDC/WETH and USDC/WBTC based on wallet index.
+ *
+ * Usage:
+ * - Set BOT_MNEMONIC in .env with your 12/24 word phrase
+ * - Set BOT_WALLET_COUNT in .env to specify number of wallets to derive (default: 3)
+ * - Wallet indices start at 0 (standard HD derivation path: m/44'/60'/0'/0/{index})
+ *
+ * Pattern:
+ * - Even indices (0, 2, 4, ...): USDC/WETH
+ * - Odd indices (1, 3, 5, ...): USDC/WBTC
+ */
+export const MNEMONIC_CONFIG = {
+  WALLET_COUNT: process.env.BOT_WALLET_COUNT ? parseInt(process.env.BOT_WALLET_COUNT) : 3,
+  POOLS: {
+    EVEN: 'USDC/WETH',  // wallets 0, 2, 4, ...
+    ODD: 'USDC/WBTC'    // wallets 1, 3, 5, ...
+  }
+}
+
+/**
+ * Get trading pool for a specific wallet index (alternating pattern)
+ */
+export function getTradingPoolForWallet(walletIndex: number): string {
+  return walletIndex % 2 === 0 ? MNEMONIC_CONFIG.POOLS.EVEN : MNEMONIC_CONFIG.POOLS.ODD
+}

@@ -12,11 +12,12 @@ import { ethers } from 'ethers'
 import { KatanaLogger } from '../../utils/logger'
 import { placeInitialOrders } from './placeInitialOrders'
 import { checkCounterOrders } from './checkCounterOrders'
-import { BOT_CONFIG, TEST_MODE_CONFIG, RATE_LIMIT_CONFIG } from './config'
-import { WalletService } from './services/WalletService'
+import { BOT_CONFIG, TEST_MODE_CONFIG, RATE_LIMIT_CONFIG, MNEMONIC_CONFIG } from './config'
+import { WalletService, WalletWithSigner } from './services/WalletService'
 import { BalanceService } from './services/BalanceService'
 import { RebalancingService } from './services/RebalancingService'
 import { OrderCancellationService } from './services/OrderCancellationService'
+import { getBotMnemonic } from './services/SecretsService'
 import { TOKEN_COLUMN_MAPPING } from '../utils/botBalanceUpdater'
 import { DatabaseLogger } from '../../utils/logging/DatabaseLogger'
 import BotWallet from '../../models/BotWallet'
@@ -25,6 +26,45 @@ const PREFIX = '[SimpleLimitOrderBot]'
 
 // Global lock to prevent concurrent bot runs
 let isRunning = false
+
+/**
+ * Sync mnemonic-derived wallets to database
+ * Creates records if they don't exist, updates trading_pool from config
+ */
+async function syncMnemonicWalletsToDatabase(wallets: WalletWithSigner[]): Promise<void> {
+  KatanaLogger.info(PREFIX, `Syncing ${wallets.length} mnemonic wallets to database...`)
+
+  for (const wallet of wallets) {
+    try {
+      const { wallet: dbWallet, created } = await BotWallet.findOrCreateWallet(
+        wallet.address,
+        wallet.index
+      )
+
+      // Always update trading_pool from config (in case it changed)
+      if (dbWallet.trading_pool !== wallet.tradingPool) {
+        await BotWallet.update(
+          { trading_pool: wallet.tradingPool },
+          { where: { wallet_address: wallet.address.toLowerCase() } }
+        )
+        KatanaLogger.info(PREFIX, `  Updated wallet ${wallet.index} trading_pool: ${wallet.tradingPool}`)
+      }
+
+      if (created) {
+        // Set trading_pool on newly created wallet
+        await BotWallet.update(
+          { trading_pool: wallet.tradingPool },
+          { where: { wallet_address: wallet.address.toLowerCase() } }
+        )
+        KatanaLogger.info(PREFIX, `  Created wallet ${wallet.index}: ${wallet.address.slice(0, 10)}... → ${wallet.tradingPool}`)
+      }
+    } catch (error) {
+      KatanaLogger.error(PREFIX, `Failed to sync wallet ${wallet.index} to database`, error)
+    }
+  }
+
+  KatanaLogger.info(PREFIX, 'Mnemonic wallets synced to database')
+}
 
 /**
  * Track last midnight reset to prevent multiple triggers
@@ -278,6 +318,47 @@ export async function runSimpleLimitOrderBot(): Promise<void> {
     const provider = new ethers.JsonRpcProvider(BOT_CONFIG.RPC_URL)
     KatanaLogger.info(PREFIX, `Connected to RPC: ${BOT_CONFIG.RPC_URL}`)
 
+    // Check if using mnemonic mode (AWS Secrets Manager or env variable)
+    const useAwsSecrets = !!process.env.BOT_MNEMONIC_SECRET_NAME
+    const useEnvMnemonic = !!process.env.BOT_MNEMONIC
+    const useMnemonicMode = useAwsSecrets || useEnvMnemonic
+
+    if (useMnemonicMode) {
+      KatanaLogger.info(PREFIX, '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+      KatanaLogger.info(PREFIX, '   MNEMONIC MODE ENABLED')
+      KatanaLogger.info(PREFIX, `   Source: ${useAwsSecrets ? 'AWS Secrets Manager' : 'Environment Variable'}`)
+      KatanaLogger.info(PREFIX, `   Deriving ${MNEMONIC_CONFIG.WALLET_COUNT} wallets`)
+      KatanaLogger.info(PREFIX, '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+
+      // Fetch mnemonic from AWS Secrets Manager if configured
+      if (useAwsSecrets) {
+        let mnemonic = await getBotMnemonic()
+
+        if (!mnemonic) {
+          KatanaLogger.error(PREFIX, 'Failed to fetch secret from AWS!')
+          return
+        }
+
+        // Set mnemonic in WalletService (will be cleared after derivation)
+        WalletService.setMnemonic(mnemonic)
+        mnemonic = null as any // Clear local reference
+      }
+
+      // Load wallets from mnemonic and sync to database
+      const mnemonicWallets = WalletService.loadAllWalletsFromMnemonic(provider)
+
+      // SECURITY: Clear mnemonic from memory after wallets are derived
+      WalletService.clearMnemonic()
+
+      if (mnemonicWallets.length === 0) {
+        KatanaLogger.error(PREFIX, 'Failed to derive wallets!')
+        return
+      }
+
+      // Sync to database (creates records if needed, updates trading_pool)
+      await syncMnemonicWalletsToDatabase(mnemonicWallets)
+    }
+
     // Load all bot wallets from database (or single wallet if TEST_WALLET_INDEX is set)
     KatanaLogger.info(PREFIX, 'Loading bot wallets from database...')
     let botWallets = await WalletService.getAllWalletRecords(TEST_MODE_CONFIG.testWalletIndex)
@@ -468,6 +549,17 @@ export function startSimpleLimitOrderBotCron(): void {
 
   if (TEST_MODE_CONFIG.orderPairCap !== null) {
     KatanaLogger.info(PREFIX, `📊 ORDER_PAIR_CAP: Maximum ${TEST_MODE_CONFIG.orderPairCap} pair(s) per wallet`)
+  }
+
+  if (process.env.BOT_MNEMONIC_SECRET_NAME) {
+    KatanaLogger.info(PREFIX, `🔐 AWS SECRETS MANAGER MODE: Fetching mnemonic from "${process.env.BOT_MNEMONIC_SECRET_NAME}"`)
+    KatanaLogger.info(PREFIX, `   Deriving ${MNEMONIC_CONFIG.WALLET_COUNT} wallets`)
+    KatanaLogger.info(PREFIX, `   Even indices (0,2,4...): ${MNEMONIC_CONFIG.POOLS.EVEN}`)
+    KatanaLogger.info(PREFIX, `   Odd indices (1,3,5...): ${MNEMONIC_CONFIG.POOLS.ODD}`)
+  } else if (process.env.BOT_MNEMONIC) {
+    KatanaLogger.info(PREFIX, `🔑 MNEMONIC MODE: Deriving ${MNEMONIC_CONFIG.WALLET_COUNT} wallets from env`)
+    KatanaLogger.info(PREFIX, `   Even indices (0,2,4...): ${MNEMONIC_CONFIG.POOLS.EVEN}`)
+    KatanaLogger.info(PREFIX, `   Odd indices (1,3,5...): ${MNEMONIC_CONFIG.POOLS.ODD}`)
   }
 
   const intervalMs = TEST_MODE_CONFIG.enabled
