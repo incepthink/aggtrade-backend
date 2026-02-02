@@ -25,7 +25,7 @@ import { Op } from 'sequelize'
 import sequelize from '../../utils/db/sequelize'
 import SushiswapActivity from '../../models/SushiswapActivity'
 import { KatanaLogger } from '../../utils/logger'
-import { CHAIN_ID } from './config'
+import { CHAIN_ID, DEPRIORITIZED_WALLETS_ORDERED } from './config'
 import {
   getExistingDailyVolume,
   setDailyTarget,
@@ -135,7 +135,8 @@ function parseArgs(): { amount: number; date: string } | null {
 
 /**
  * Remove volume from a specific date to reach target
- * Removes records starting from the largest until we reach target volume
+ * Prioritizes removing swaps from deprioritized wallets first (in order),
+ * then falls back to removing largest transactions
  */
 async function removeVolume(
   date: string,
@@ -149,8 +150,7 @@ async function removeVolume(
   const startOfDay = new Date(`${date}T00:00:00.000Z`)
   const endOfDay = new Date(`${date}T23:59:59.999Z`)
 
-  // Get all records for this date, ordered by usd_volume descending
-  // We'll remove larger transactions first to minimize record deletions
+  // Get all records for this date
   const records = await SushiswapActivity.findAll({
     where: {
       chain_id: CHAIN_ID,
@@ -173,22 +173,69 @@ async function removeVolume(
   let volumeToRemove = excessVolume
   let volumeRemoved = 0
 
-  for (const record of records) {
+  // Create a Set to track already selected record IDs
+  const selectedIds = new Set<number>()
+
+  // PRIORITY 1: Remove from deprioritized wallets first (in order)
+  for (const wallet of DEPRIORITIZED_WALLETS_ORDERED) {
     if (volumeToRemove <= 0) break
 
-    const recordVolume = parseFloat(String((record as any).usd_volume))
+    const walletRecords = records.filter(
+      (r: any) => r.wallet_address?.toLowerCase() === wallet && !selectedIds.has(r.id)
+    )
 
-    // If this single record would remove too much, try smaller records
-    if (recordVolume > volumeToRemove * 1.5 && recordsToDelete.length === 0) {
-      continue
+    KatanaLogger.info(
+      PREFIX,
+      `Checking wallet ${wallet.slice(0, 10)}...: ${walletRecords.length} records`
+    )
+
+    // Sort by volume descending to remove larger ones first
+    walletRecords.sort(
+      (a: any, b: any) => parseFloat(String(b.usd_volume)) - parseFloat(String(a.usd_volume))
+    )
+
+    for (const record of walletRecords) {
+      if (volumeToRemove <= 0) break
+
+      const recordVolume = parseFloat(String((record as any).usd_volume))
+      recordsToDelete.push((record as any).id)
+      selectedIds.add((record as any).id)
+      volumeRemoved += recordVolume
+      volumeToRemove -= recordVolume
     }
 
-    recordsToDelete.push((record as any).id)
-    volumeRemoved += recordVolume
-    volumeToRemove -= recordVolume
+    if (walletRecords.length > 0 && volumeToRemove > 0) {
+      KatanaLogger.info(
+        PREFIX,
+        `Removed all ${walletRecords.length} records from ${wallet.slice(0, 10)}..., still need $${Math.round(volumeToRemove).toLocaleString()}`
+      )
+    }
   }
 
-  // If we couldn't find appropriate records, just delete the smallest ones
+  // PRIORITY 2: If still need to remove more, use remaining records (largest first)
+  if (volumeToRemove > 0) {
+    KatanaLogger.info(PREFIX, `Falling back to largest records for remaining $${Math.round(volumeToRemove).toLocaleString()}`)
+
+    const remainingRecords = records.filter((r: any) => !selectedIds.has(r.id))
+
+    for (const record of remainingRecords) {
+      if (volumeToRemove <= 0) break
+
+      const recordVolume = parseFloat(String((record as any).usd_volume))
+
+      // If this single record would remove too much, try smaller records
+      if (recordVolume > volumeToRemove * 1.5 && recordsToDelete.length === 0) {
+        continue
+      }
+
+      recordsToDelete.push((record as any).id)
+      selectedIds.add((record as any).id)
+      volumeRemoved += recordVolume
+      volumeToRemove -= recordVolume
+    }
+  }
+
+  // FALLBACK: If we couldn't find appropriate records, just delete the smallest ones
   if (recordsToDelete.length === 0 && volumeToRemove > 0) {
     const smallestRecords = [...records].sort(
       (a: any, b: any) => parseFloat(String(a.usd_volume)) - parseFloat(String(b.usd_volume))
