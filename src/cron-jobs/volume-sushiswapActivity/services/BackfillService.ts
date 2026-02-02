@@ -13,13 +13,7 @@ import {
   getExistingDailyVolume,
   shouldSkipDate,
   getTodayDate,
-  getHoursRemaining,
   getCurrentHour,
-  getDailyVolumeState,
-  calculateHourlyBudget,
-  logVolumeState,
-  logHourlyBudget,
-  getExistingHourlyVolume,
 } from './VolumeTracker'
 import {
   fetchPools,
@@ -252,7 +246,29 @@ export async function runBackfill(): Promise<BackfillResult> {
 }
 
 /**
+ * Calculate hourly budget based on daily target divided by 24 hours
+ * Applies variance to avoid fixed patterns
+ */
+function calculateHourlyBudgetFromDailyTarget(dailyTarget: number): number {
+  // Base amount is daily target divided by 24 hours
+  const baseAmount = dailyTarget / 24
+
+  // Apply random variance (-30% to +30%)
+  const variance = (Math.random() - 0.5) * 2 * VOLUME_CONFIG.HOURLY_VARIANCE
+  const adjustedAmount = baseAmount * (1 + variance)
+
+  // Apply min/max caps
+  const finalAmount = Math.max(
+    VOLUME_CONFIG.HOURLY_MIN,
+    Math.min(VOLUME_CONFIG.HOURLY_MAX, adjustedAmount)
+  )
+
+  return Math.round(finalAmount)
+}
+
+/**
  * Process a single hour for today
+ * Adds hourly portion of daily target, independent of existing volume
  */
 export async function processHour(date: string, hour: number): Promise<HourlyProcessingResult> {
   KatanaLogger.info(PREFIX, `\n${'─'.repeat(50)}`)
@@ -260,61 +276,14 @@ export async function processHour(date: string, hour: number): Promise<HourlyPro
   KatanaLogger.info(PREFIX, `${'─'.repeat(50)}`)
 
   try {
-    // Get current volume state
-    const state = await getDailyVolumeState(date)
-    logVolumeState(state)
+    // Get daily target for this date
+    const dailyTarget = getDailyTarget(date)
 
-    // Check if we have remaining volume to add
-    if (state.remainingVolume <= 0) {
-      KatanaLogger.info(PREFIX, `Daily target already met, skipping hour ${hour}`)
-      return {
-        success: true,
-        date,
-        hour,
-        budget: 0,
-        volumeAdded: 0,
-        swapsInserted: 0,
-        classicCount: 0,
-        limitCount: 0,
-      }
-    }
+    // Calculate hourly budget from daily target (dailyTarget / 24 with variance)
+    const volumeNeeded = calculateHourlyBudgetFromDailyTarget(dailyTarget)
 
-    // Calculate hourly budget
-    const hoursRemaining = 24 - hour
-    const budget = calculateHourlyBudget(state.remainingVolume, hoursRemaining)
-    logHourlyBudget(budget, hour)
-
-    if (budget.finalAmount <= 0) {
-      KatanaLogger.info(PREFIX, `No budget for hour ${hour}`)
-      return {
-        success: true,
-        date,
-        hour,
-        budget: 0,
-        volumeAdded: 0,
-        swapsInserted: 0,
-        classicCount: 0,
-        limitCount: 0,
-      }
-    }
-
-    // Check existing volume for this hour
-    const existingHourlyVolume = await getExistingHourlyVolume(date, hour)
-    if (existingHourlyVolume >= budget.finalAmount * 0.8) {
-      KatanaLogger.info(PREFIX, `Hour ${hour} already has sufficient volume: $${Math.round(existingHourlyVolume).toLocaleString()}`)
-      return {
-        success: true,
-        date,
-        hour,
-        budget: budget.finalAmount,
-        volumeAdded: 0,
-        swapsInserted: 0,
-        classicCount: 0,
-        limitCount: 0,
-      }
-    }
-
-    const volumeNeeded = budget.finalAmount - existingHourlyVolume
+    KatanaLogger.info(PREFIX, `Daily target: $${dailyTarget.toLocaleString()}`)
+    KatanaLogger.info(PREFIX, `Hourly budget: $${volumeNeeded.toLocaleString()}`)
 
     // Fetch swaps for this hour
     KatanaLogger.info(PREFIX, `Fetching swaps for hour ${hour}...`)
@@ -326,7 +295,7 @@ export async function processHour(date: string, hour: number): Promise<HourlyPro
         success: false,
         date,
         hour,
-        budget: budget.finalAmount,
+        budget: volumeNeeded,
         volumeAdded: 0,
         swapsInserted: 0,
         classicCount: 0,
@@ -345,7 +314,7 @@ export async function processHour(date: string, hour: number): Promise<HourlyPro
         success: true,
         date,
         hour,
-        budget: budget.finalAmount,
+        budget: volumeNeeded,
         volumeAdded: 0,
         swapsInserted: 0,
         classicCount: 0,
@@ -362,7 +331,7 @@ export async function processHour(date: string, hour: number): Promise<HourlyPro
         success: false,
         date,
         hour,
-        budget: budget.finalAmount,
+        budget: volumeNeeded,
         volumeAdded: 0,
         swapsInserted: 0,
         classicCount: 0,
@@ -385,7 +354,7 @@ export async function processHour(date: string, hour: number): Promise<HourlyPro
       success: true,
       date,
       hour,
-      budget: budget.finalAmount,
+      budget: volumeNeeded,
       volumeAdded: selection.totalVolume,
       swapsInserted: insertedCount,
       classicCount: selection.classicCount,
