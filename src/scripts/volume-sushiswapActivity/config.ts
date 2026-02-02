@@ -65,3 +65,11 @@ export const POOLS_PER_TOKEN = 10
 
 // Max swaps to fetch per pool
 export const MAX_SWAPS_PER_POOL = 2000
+
+// Deprioritized wallet addresses - swaps from these wallets will be selected last
+// Use lowercase addresses
+export const DEPRIORITIZED_WALLETS = new Set([
+  '0xd2b37ade14708bf18904047b1e31f8166d39612b',
+  '0x5b46ccf2b43b387eac375b774600550a4754a68d',
+  '0x4e1d81a3e627b9294532e990109e4c21d217376c',
+])

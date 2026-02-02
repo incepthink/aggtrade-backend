@@ -17,6 +17,7 @@ import {
   POOLS_PER_TOKEN,
   MAX_SWAPS_PER_POOL,
   SWAP_RATIO_CONFIG,
+  DEPRIORITIZED_WALLETS,
 } from '../config'
 import { KatanaLogger } from '../../../utils/logger'
 
@@ -190,6 +191,7 @@ function getClassicRatio(): number {
 /**
  * Select swaps to match a target volume budget
  * Distributes between CLASSIC and LIMIT_ORDER types
+ * Deprioritizes swaps from certain wallet addresses (selected last)
  */
 export function selectSwapsByVolume(
   swaps: FullSwapData[],
@@ -207,8 +209,23 @@ export function selectSwapsByVolume(
     }
   }
 
-  // Shuffle for randomness
-  const shuffled = shuffleArray(swaps)
+  // Separate swaps into prioritized and deprioritized groups
+  const prioritizedSwaps: FullSwapData[] = []
+  const deprioritizedSwaps: FullSwapData[] = []
+
+  for (const swap of swaps) {
+    if (DEPRIORITIZED_WALLETS.has(swap.sender.toLowerCase())) {
+      deprioritizedSwaps.push(swap)
+    } else {
+      prioritizedSwaps.push(swap)
+    }
+  }
+
+  // Shuffle each group separately, then concatenate with deprioritized last
+  const shuffled = [
+    ...shuffleArray(prioritizedSwaps),
+    ...shuffleArray(deprioritizedSwaps),
+  ]
 
   // Calculate target volumes for each type
   const classicRatio = getClassicRatio()
