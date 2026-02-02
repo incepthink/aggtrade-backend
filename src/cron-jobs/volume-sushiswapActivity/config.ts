@@ -9,8 +9,8 @@ export const CHAIN_ID = 747474 // Katana/Ronin
 
 // Volume targets (USD)
 export const VOLUME_CONFIG = {
-  DAILY_TARGET_MIN: 60000,   // $60k minimum
-  DAILY_TARGET_MAX: 80000,   // $80k maximum
+  DAILY_TARGET_MIN: 30000,   // $60k minimum
+  DAILY_TARGET_MAX: 50000,   // $80k maximum
 
   // Per-hour budget caps (when distributing remaining volume)
   HOURLY_MIN: 2000,          // Minimum volume per hour
@@ -30,7 +30,7 @@ export const SWAP_RATIO_CONFIG = {
 
 // Backfill configuration
 export const BACKFILL_CONFIG = {
-  START_DATE: '2026-01-17',  // Start backfill from this date
+  START_DATE: '2026-02-02',  // Start backfill from this date
   // Backfill volume per day (no hourly distribution, just daily targets)
   BACKFILL_VOLUME_MIN: 60000,
   BACKFILL_VOLUME_MAX: 80000,
