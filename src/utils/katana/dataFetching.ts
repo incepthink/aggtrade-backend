@@ -2,11 +2,12 @@
 
 import axios from "axios";
 import Bottleneck from "bottleneck";
-import { 
-  KATANA_SUBGRAPH_URL, 
-  RATE_LIMITER_CONFIG, 
-  MAX_SKIP_LIMIT, 
-  MAX_SKIP_LIMIT_INCREMENTAL 
+import {
+  KATANA_SUBGRAPH_URL,
+  KATANA_SUBGRAPH_HEADERS,
+  RATE_LIMITER_CONFIG,
+  MAX_SKIP_LIMIT,
+  MAX_SKIP_LIMIT_INCREMENTAL
 } from './constants';
 import {
   getPoolsByTVLQuery,
@@ -33,8 +34,10 @@ export async function fetchPoolsByTVL(tokenAddress: string): Promise<Pool[]> {
     axios.post<SushiGraphResponse>(KATANA_SUBGRAPH_URL, {
       query: getPoolsByTVLQuery(),
       variables: { tokenAddress: tokenAddress.toLowerCase() },
-    })
+    }, { headers: KATANA_SUBGRAPH_HEADERS })
   );
+  console.log(response);
+  
 
   if (response.data.errors) {
     console.error("[Fetch Pools] GraphQL errors:", response.data.errors);
@@ -87,7 +90,7 @@ export async function fetchSwaps(
           first: batchSize,
           skip,
         },
-      })
+      }, { headers: KATANA_SUBGRAPH_HEADERS })
     );
 
     if (response.data.errors) {
@@ -160,7 +163,7 @@ export async function fetchHistoricalSwaps(
           first: batchSize,
           skip,
         },
-      })
+      }, { headers: KATANA_SUBGRAPH_HEADERS })
     );
 
     if (response.data.errors) {
@@ -202,7 +205,7 @@ export async function fetchPoolsWithMetrics(): Promise<PoolWithMetrics[]> {
   const response = await sushiLimiter.schedule(() =>
     axios.post<SushiGraphResponse>(KATANA_SUBGRAPH_URL, {
       query: getPoolsWithMetricsQuery(),
-    })
+    }, { headers: KATANA_SUBGRAPH_HEADERS })
   );
 
   if (response.data.errors) {
@@ -256,7 +259,7 @@ export async function fetchFullSwaps(
           first: batchSize,
           skip,
         },
-      })
+      }, { headers: KATANA_SUBGRAPH_HEADERS })
     );
     console.log(response.data);
     

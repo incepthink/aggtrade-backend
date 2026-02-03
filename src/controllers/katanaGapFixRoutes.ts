@@ -13,7 +13,10 @@ import axios from "axios";
 import Bottleneck from "bottleneck";
 
 // Constants
-const KATANA_SUBGRAPH_URL = "https://api.studio.thegraph.com/query/106601/sushi-v-3-katana-2/version/latest";
+const KATANA_SUBGRAPH_URL = "https://gateway.thegraph.com/api/subgraphs/id/433LddGWqTNp791okuyAgumc6ccG7E2N9PB21jEHGmQc";
+const KATANA_SUBGRAPH_HEADERS = {
+  "Authorization": `Bearer ${process.env.SUBGRAPH_HEADER}`,
+};
 const FULL_SWAP_DATA_PREFIX = "full_swaps_katana_";
 const FULL_SWAP_DATA_TTL = 365 * 24 * 60 * 60;
 const MAX_REDIS_SWAPS = 3000;
@@ -151,7 +154,7 @@ async function fetchSwapsForGap(
           first,
           skip,
         },
-      })
+      }, { headers: KATANA_SUBGRAPH_HEADERS })
     );
 
     const swaps = response.data?.data?.swaps || [];
@@ -265,7 +268,7 @@ async function findPoolForToken(tokenAddress: string): Promise<Pool | null> {
     const response = await axios.post(KATANA_SUBGRAPH_URL, {
       query,
       variables: { tokenAddress: tokenAddress.toLowerCase() },
-    });
+    }, { headers: KATANA_SUBGRAPH_HEADERS });
 
     const pools = response.data?.data?.pools || [];
     

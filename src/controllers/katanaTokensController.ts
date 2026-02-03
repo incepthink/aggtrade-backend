@@ -54,7 +54,10 @@ export interface ProcessedToken {
 // Constants
 // -----------------------------
 const KATANA_SUBGRAPH_URL =
-  "https://api.studio.thegraph.com/query/106601/sushi-v-3-katana-2/version/latest";
+  "https://gateway.thegraph.com/api/subgraphs/id/433LddGWqTNp791okuyAgumc6ccG7E2N9PB21jEHGmQc";
+const KATANA_SUBGRAPH_HEADERS = {
+  "Authorization": `Bearer ${process.env.SUBGRAPH_HEADER}`,
+};
 const KATANA_CHAIN_ID = 747474;
 
 // -----------------------------
@@ -122,7 +125,7 @@ async function fetchAllPools(): Promise<GraphPool[]> {
         },
         {
           timeout: 15000,
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...KATANA_SUBGRAPH_HEADERS },
         }
       );
 

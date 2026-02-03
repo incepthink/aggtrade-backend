@@ -96,7 +96,10 @@ const TOKEN_OHLC_CACHE_TTL = 6 * 60 * 60; // 6 hours
 
 // Constants - Updated for Katana
 const KATANA_SUBGRAPH_URL =
-  "https://api.studio.thegraph.com/query/106601/sushi-v-3-katana/v0.0.1";
+  "https://gateway.thegraph.com/api/subgraphs/id/433LddGWqTNp791okuyAgumc6ccG7E2N9PB21jEHGmQc";
+const KATANA_SUBGRAPH_HEADERS = {
+  "Authorization": `Bearer ${process.env.SUBGRAPH_HEADER}`,
+};
 
 /**
  * Get GraphQL query to find token information
@@ -358,6 +361,7 @@ export async function getKatanaTokenOHLCData(
             timeout: 15000,
             headers: {
               "Content-Type": "application/json",
+              ...KATANA_SUBGRAPH_HEADERS,
             },
           }
         );
@@ -411,6 +415,7 @@ export async function getKatanaTokenOHLCData(
             timeout: 15000,
             headers: {
               "Content-Type": "application/json",
+              ...KATANA_SUBGRAPH_HEADERS,
             },
           }
         );
@@ -493,6 +498,7 @@ export async function getKatanaTokenOHLCData(
                 timeout: 10000,
                 headers: {
                   "Content-Type": "application/json",
+                  ...KATANA_SUBGRAPH_HEADERS,
                 },
               }
             );

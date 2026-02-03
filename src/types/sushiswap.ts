@@ -139,6 +139,7 @@ export type SushiGraphResponse = SushiGraphResponseV3 | SushiGraphResponseV2;
 
 export interface ChainConfig {
   subgraphUrl: string;
+  subgraphHeaders?: Record<string, string>;
   redisPrefix: string;
   chain: string;
   dexId: string;

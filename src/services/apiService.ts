@@ -8,6 +8,7 @@ import {
 } from "../types/katanaSqrtPrice.types";
 import {
   KATANA_SUBGRAPH_URL,
+  KATANA_SUBGRAPH_HEADERS,
   SUSHI_API_BASE,
   KATANA_CHAIN_ID,
   RATE_LIMIT_RESERVOIR,
@@ -127,7 +128,7 @@ export class ApiService {
         { query, variables },
         {
           timeout: POOLS_TIMEOUT,
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json", ...KATANA_SUBGRAPH_HEADERS }
         }
       );
 
@@ -249,7 +250,7 @@ export class ApiService {
           { query, variables },
           {
             timeout: GRAPHQL_TIMEOUT,
-            headers: { "Content-Type": "application/json" }
+            headers: { "Content-Type": "application/json", ...KATANA_SUBGRAPH_HEADERS }
           }
         );
 

@@ -22,7 +22,10 @@ export const UPDATE_INTERVAL_HOURS = 1;
 // Chain configurations
 export const CHAIN_CONFIGS: Record<string, ChainConfig> = {
   katana: {
-    subgraphUrl: "https://api.studio.thegraph.com/query/106601/sushi-v-3-katana/version/latest",
+    subgraphUrl: "https://gateway.thegraph.com/api/subgraphs/id/433LddGWqTNp791okuyAgumc6ccG7E2N9PB21jEHGmQc",
+    subgraphHeaders: {
+      "Authorization": `Bearer ${process.env.SUBGRAPH_HEADER}`,
+    },
     redisPrefix: "full_swaps_katana_",
     chain: "katana",
     dexId: "katana-sushiswap",

@@ -12,8 +12,11 @@ import {
   formatTokenAddress,
 } from "../utils/sushiswap";
 
-export const KATANA_SUBGRAPH_URL = 
-  "https://api.studio.thegraph.com/query/106601/sushi-v-3-katana-2/version/latest";
+export const KATANA_SUBGRAPH_URL =
+  "https://gateway.thegraph.com/api/subgraphs/id/433LddGWqTNp791okuyAgumc6ccG7E2N9PB21jEHGmQc";
+export const KATANA_SUBGRAPH_HEADERS = {
+  "Authorization": `Bearer ${process.env.SUBGRAPH_HEADER}`,
+};
 
 /**
  * Fetch pools/pairs by TVL for a specific token (version-agnostic).
@@ -22,7 +25,8 @@ export const KATANA_SUBGRAPH_URL =
 export async function fetchPoolsByTVL(
   subgraphUrl: string,
   tokenAddress: string,
-  version: "v2" | "v3" = "v3"
+  version: "v2" | "v3" = "v3",
+  extraHeaders?: Record<string, string>
 ): Promise<NormalizedPool[]> {
   const query = getPoolsQuery(version);
   const variables = { tokenAddress: formatTokenAddress(tokenAddress, version) };
@@ -32,7 +36,7 @@ export async function fetchPoolsByTVL(
   const resp = await axios.post<any>(
     subgraphUrl,
     { query, variables },
-    { timeout: 15_000, headers: { "Content-Type": "application/json" } }
+    { timeout: 15_000, headers: { "Content-Type": "application/json", ...extraHeaders } }
   );
 
   // v3: data.pools; v2: data.pairs (we normalize both)
@@ -57,7 +61,8 @@ export async function fetchSwaps(
   endTime: number,
   maxSwaps: number = 50_000,
   chain: string = "unknown",
-  version: "v2" | "v3" = "v3"
+  version: "v2" | "v3" = "v3",
+  extraHeaders?: Record<string, string>
 ): Promise<SwapData[]> {
   const all: SwapData[] = [];
   let hasMore = true;
@@ -86,7 +91,7 @@ export async function fetchSwaps(
     const resp = await axios.post<any>(
       subgraphUrl,
       { query, variables },
-      { timeout: 15_000, headers: { "Content-Type": "application/json" } }
+      { timeout: 15_000, headers: { "Content-Type": "application/json", ...extraHeaders } }
     );
 
     // Our queries name the field "swaps" for both versions
@@ -123,7 +128,8 @@ export async function fetchPoolsByTVLWithConfig(
   return fetchPoolsByTVL(
     config.subgraphUrl,
     tokenAddress,
-    config.version as "v2" | "v3"
+    config.version as "v2" | "v3",
+    config.subgraphHeaders
   );
 }
 
@@ -142,7 +148,8 @@ export async function fetchSwapsWithConfig(
     endTime,
     maxSwaps,
     String(config.chain),
-    config.version as "v2" | "v3"
+    config.version as "v2" | "v3",
+    config.subgraphHeaders
   );
 }
 
@@ -169,7 +176,7 @@ export async function getUserPositionsByAddress(address:string) {
   const res = await axios.post<any>(
     KATANA_SUBGRAPH_URL,
     { query, variables },
-    { timeout: 15_000, headers: { "Content-Type": "application/json" } }
+    { timeout: 15_000, headers: { "Content-Type": "application/json", ...KATANA_SUBGRAPH_HEADERS } }
   );
 
   const postions: Position[] = res.data.data.positions

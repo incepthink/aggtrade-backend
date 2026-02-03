@@ -3,8 +3,12 @@
 /**
  * Subgraph Configuration
  */
-export const KATANA_SUBGRAPH_URL = 
-  "https://api.studio.thegraph.com/query/106601/sushi-v-3-katana-3/version/latest";
+export const KATANA_SUBGRAPH_URL =
+  "https://gateway.thegraph.com/api/subgraphs/id/433LddGWqTNp791okuyAgumc6ccG7E2N9PB21jEHGmQc";
+
+export const KATANA_SUBGRAPH_HEADERS = {
+  "Authorization": `Bearer ${process.env.SUBGRAPH_HEADER}`,
+};
 
 /**
  * Rate Limiter Configuration
