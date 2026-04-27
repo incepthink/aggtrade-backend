@@ -9,6 +9,7 @@ import BotOrdersSimple from './BotOrdersSimple'
 import XpDistribution from './XpDistribution'
 import CronJobRun from './CronJobRun'
 import FailedBalanceQueue from './FailedBalanceQueue'
+import PerpPosition from './PerpPosition'
 
 const defineAssociations = () => {
   // BotWalletExecution <-> BotLimitOrder (one-to-many)
@@ -63,8 +64,18 @@ const defineAssociations = () => {
     foreignKey: 'user_id',
     as: 'user'
   })
+
+  // User <-> PerpPosition (one-to-many)
+  User.hasMany(PerpPosition, {
+    foreignKey: 'user_id',
+    as: 'perpPositions'
+  })
+  PerpPosition.belongsTo(User, {
+    foreignKey: 'user_id',
+    as: 'user'
+  })
 }
 
 defineAssociations()
 
-export { User, ReferralCode, Referral, KatanaSwap, BotWalletExecution, BotLimitOrder, BotWallet, BotOrdersSimple, XpDistribution, CronJobRun, FailedBalanceQueue }
+export { User, ReferralCode, Referral, KatanaSwap, BotWalletExecution, BotLimitOrder, BotWallet, BotOrdersSimple, XpDistribution, CronJobRun, FailedBalanceQueue, PerpPosition }
