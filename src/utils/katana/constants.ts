@@ -4,7 +4,7 @@
  * Subgraph Configuration
  */
 export const KATANA_SUBGRAPH_URL =
-  "https://gateway.thegraph.com/api/subgraphs/id/EUtVqtEqe9VyUppqnA6rmkVw3YhsQZfB5pi9PgKKzase";
+  "https://gateway.thegraph.com/api/subgraphs/id/433LddGWqTNp791okuyAgumc6ccG7E2N9PB21jEHGmQc";
 
 export const KATANA_SUBGRAPH_HEADERS = {
   Authorization: `Bearer ${process.env.SUBGRAPH_HEADER}`,
