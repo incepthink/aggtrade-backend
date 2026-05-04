@@ -7,16 +7,22 @@ import {
   KATANA_SUBGRAPH_HEADERS,
   RATE_LIMITER_CONFIG,
   MAX_SKIP_LIMIT,
-  MAX_SKIP_LIMIT_INCREMENTAL
-} from './constants';
+  MAX_SKIP_LIMIT_INCREMENTAL,
+} from "./constants";
 import {
   getPoolsByTVLQuery,
   getSwapsQuery,
   getHistoricalSwapsQuery,
-  getFullSwapsQuery
-} from './graphqlQueries';
-import type { SwapData, Pool, SushiGraphResponse, FullSwapData, PoolWithMetrics } from './types';
-import { getPoolsWithMetricsQuery } from './graphqlQueries';
+  getFullSwapsQuery,
+} from "./graphqlQueries";
+import type {
+  SwapData,
+  Pool,
+  SushiGraphResponse,
+  FullSwapData,
+  PoolWithMetrics,
+} from "./types";
+import { getPoolsWithMetricsQuery } from "./graphqlQueries";
 
 /**
  * Shared rate limiter instance for all subgraph requests
@@ -25,16 +31,20 @@ export const sushiLimiter = new Bottleneck(RATE_LIMITER_CONFIG);
 
 /**
  * Fetch pools containing a specific token, ordered by TVL
- * 
+ *
  * @param tokenAddress - Token address to search for
  * @returns Array of pools containing the token
  */
 export async function fetchPoolsByTVL(tokenAddress: string): Promise<Pool[]> {
   const response = await sushiLimiter.schedule(() =>
-    axios.post<SushiGraphResponse>(KATANA_SUBGRAPH_URL, {
-      query: getPoolsByTVLQuery(),
-      variables: { tokenAddress: tokenAddress.toLowerCase() },
-    }, { headers: KATANA_SUBGRAPH_HEADERS })
+    axios.post<SushiGraphResponse>(
+      KATANA_SUBGRAPH_URL,
+      {
+        query: getPoolsByTVLQuery(),
+        variables: { tokenAddress: tokenAddress.toLowerCase() },
+      },
+      { headers: KATANA_SUBGRAPH_HEADERS },
+    ),
   );
 
   if (response.data.errors) {
@@ -43,15 +53,17 @@ export async function fetchPoolsByTVL(tokenAddress: string): Promise<Pool[]> {
   }
 
   const pools = response.data.data?.pools || [];
-  console.log(`[Fetch Pools] Found ${pools.length} pools for token ${tokenAddress}`);
-  
+  console.log(
+    `[Fetch Pools] Found ${pools.length} pools for token ${tokenAddress}`,
+  );
+
   return pools;
 }
 
 /**
  * Fetch swaps for a specific pool in a time range
  * Handles pagination automatically with batching
- * 
+ *
  * @param poolId - Pool ID to fetch swaps from
  * @param startTime - Start time (Unix timestamp in seconds)
  * @param endTime - End time (Unix timestamp in seconds)
@@ -64,7 +76,7 @@ export async function fetchSwaps(
   startTime: number,
   endTime: number,
   maxSwaps: number = 3000,
-  maxSkip: number = MAX_SKIP_LIMIT_INCREMENTAL
+  maxSkip: number = MAX_SKIP_LIMIT_INCREMENTAL,
 ): Promise<SwapData[]> {
   const allSwaps: SwapData[] = [];
   let skip = 0;
@@ -79,25 +91,32 @@ export async function fetchSwaps(
 
   while (skip < maxSkip && allSwaps.length < maxSwaps) {
     const response = await sushiLimiter.schedule(() =>
-      axios.post<SushiGraphResponse>(KATANA_SUBGRAPH_URL, {
-        query: getSwapsQuery(),
-        variables: {
-          poolId: poolId.toLowerCase(),
-          startTime,
-          endTime,
-          first: batchSize,
-          skip,
+      axios.post<SushiGraphResponse>(
+        KATANA_SUBGRAPH_URL,
+        {
+          query: getSwapsQuery(),
+          variables: {
+            poolId: poolId.toLowerCase(),
+            startTime,
+            endTime,
+            first: batchSize,
+            skip,
+          },
         },
-      }, { headers: KATANA_SUBGRAPH_HEADERS })
+        { headers: KATANA_SUBGRAPH_HEADERS },
+      ),
     );
 
     if (response.data.errors) {
-      console.error(`[Fetch Swaps] GraphQL errors at skip ${skip}:`, response.data.errors);
+      console.error(
+        `[Fetch Swaps] GraphQL errors at skip ${skip}:`,
+        response.data.errors,
+      );
       throw new Error(`GraphQL error: ${JSON.stringify(response.data.errors)}`);
     }
 
     const batch = response.data.data?.swaps || [];
-    
+
     if (batch.length === 0) {
       console.log(`[Fetch Swaps] No more swaps at skip ${skip}`);
       break;
@@ -106,7 +125,9 @@ export async function fetchSwaps(
     allSwaps.push(...batch);
     skip += batchSize;
 
-    console.log(`[Fetch Swaps] Batch complete: ${batch.length} swaps, total: ${allSwaps.length}`);
+    console.log(
+      `[Fetch Swaps] Batch complete: ${batch.length} swaps, total: ${allSwaps.length}`,
+    );
 
     // Stop if we've fetched enough
     if (allSwaps.length >= maxSwaps) {
@@ -116,7 +137,9 @@ export async function fetchSwaps(
 
     // Stop if batch was smaller than expected (no more data)
     if (batch.length < batchSize) {
-      console.log(`[Fetch Swaps] Received partial batch, no more data available`);
+      console.log(
+        `[Fetch Swaps] Received partial batch, no more data available`,
+      );
       break;
     }
   }
@@ -128,7 +151,7 @@ export async function fetchSwaps(
 /**
  * Fetch historical swaps (older than a specific timestamp)
  * Used for appending historical data
- * 
+ *
  * @param poolId - Pool ID to fetch swaps from
  * @param olderThan - Timestamp to fetch older swaps (Unix timestamp in seconds)
  * @param maxSwaps - Maximum total swaps to fetch
@@ -139,7 +162,7 @@ export async function fetchHistoricalSwaps(
   poolId: string,
   olderThan: number,
   maxSwaps: number = 6000,
-  maxSkip: number = MAX_SKIP_LIMIT
+  maxSkip: number = MAX_SKIP_LIMIT,
 ): Promise<SwapData[]> {
   const allSwaps: SwapData[] = [];
   let skip = 0;
@@ -153,19 +176,26 @@ export async function fetchHistoricalSwaps(
 
   while (skip < maxSkip && allSwaps.length < maxSwaps) {
     const response = await sushiLimiter.schedule(() =>
-      axios.post<SushiGraphResponse>(KATANA_SUBGRAPH_URL, {
-        query: getHistoricalSwapsQuery(),
-        variables: {
-          poolId: poolId.toLowerCase(),
-          olderThan,
-          first: batchSize,
-          skip,
+      axios.post<SushiGraphResponse>(
+        KATANA_SUBGRAPH_URL,
+        {
+          query: getHistoricalSwapsQuery(),
+          variables: {
+            poolId: poolId.toLowerCase(),
+            olderThan,
+            first: batchSize,
+            skip,
+          },
         },
-      }, { headers: KATANA_SUBGRAPH_HEADERS })
+        { headers: KATANA_SUBGRAPH_HEADERS },
+      ),
     );
 
     if (response.data.errors) {
-      console.error(`[Fetch Historical] GraphQL errors at skip ${skip}:`, response.data.errors);
+      console.error(
+        `[Fetch Historical] GraphQL errors at skip ${skip}:`,
+        response.data.errors,
+      );
       throw new Error(`GraphQL error: ${JSON.stringify(response.data.errors)}`);
     }
 
@@ -179,7 +209,9 @@ export async function fetchHistoricalSwaps(
     allSwaps.push(...batch);
     skip += batchSize;
 
-    console.log(`[Fetch Historical] Batch complete: ${batch.length} swaps, total: ${allSwaps.length}`);
+    console.log(
+      `[Fetch Historical] Batch complete: ${batch.length} swaps, total: ${allSwaps.length}`,
+    );
 
     if (allSwaps.length >= maxSwaps) {
       console.log(`[Fetch Historical] Reached max swaps limit: ${maxSwaps}`);
@@ -187,12 +219,16 @@ export async function fetchHistoricalSwaps(
     }
 
     if (batch.length < batchSize) {
-      console.log(`[Fetch Historical] Received partial batch, no more data available`);
+      console.log(
+        `[Fetch Historical] Received partial batch, no more data available`,
+      );
       break;
     }
   }
 
-  console.log(`[Fetch Historical] Fetch complete: ${allSwaps.length} total swaps`);
+  console.log(
+    `[Fetch Historical] Fetch complete: ${allSwaps.length} total swaps`,
+  );
   return allSwaps;
 }
 
@@ -201,9 +237,13 @@ export async function fetchHistoricalSwaps(
  */
 export async function fetchPoolsWithMetrics(): Promise<PoolWithMetrics[]> {
   const response = await sushiLimiter.schedule(() =>
-    axios.post<SushiGraphResponse>(KATANA_SUBGRAPH_URL, {
-      query: getPoolsWithMetricsQuery(),
-    }, { headers: KATANA_SUBGRAPH_HEADERS })
+    axios.post<SushiGraphResponse>(
+      KATANA_SUBGRAPH_URL,
+      {
+        query: getPoolsWithMetricsQuery(),
+      },
+      { headers: KATANA_SUBGRAPH_HEADERS },
+    ),
   );
 
   if (response.data.errors) {
@@ -233,7 +273,7 @@ export async function fetchFullSwaps(
   startTime: number,
   endTime: number,
   maxSwaps: number = 5000,
-  maxSkip: number = MAX_SKIP_LIMIT
+  maxSkip: number = MAX_SKIP_LIMIT,
 ): Promise<FullSwapData[]> {
   const allSwaps: FullSwapData[] = [];
   let skip = 0;
@@ -248,22 +288,28 @@ export async function fetchFullSwaps(
 
   while (skip < maxSkip && allSwaps.length < maxSwaps) {
     const response = await sushiLimiter.schedule(() =>
-      axios.post<SushiGraphResponse>(KATANA_SUBGRAPH_URL, {
-        query: getFullSwapsQuery(),
-        variables: {
-          poolId: poolId.toLowerCase(),
-          startTime,
-          endTime,
-          first: batchSize,
-          skip,
+      axios.post<SushiGraphResponse>(
+        KATANA_SUBGRAPH_URL,
+        {
+          query: getFullSwapsQuery(),
+          variables: {
+            poolId: poolId.toLowerCase(),
+            startTime,
+            endTime,
+            first: batchSize,
+            skip,
+          },
         },
-      }, { headers: KATANA_SUBGRAPH_HEADERS })
+        { headers: KATANA_SUBGRAPH_HEADERS },
+      ),
     );
     console.log(response.data);
-    
 
     if (response.data.errors) {
-      console.error(`[Fetch Full Swaps] GraphQL errors at skip ${skip}:`, response.data.errors);
+      console.error(
+        `[Fetch Full Swaps] GraphQL errors at skip ${skip}:`,
+        response.data.errors,
+      );
       throw new Error(`GraphQL error: ${JSON.stringify(response.data.errors)}`);
     }
 
@@ -277,7 +323,9 @@ export async function fetchFullSwaps(
     allSwaps.push(...(batch as FullSwapData[]));
     skip += batchSize;
 
-    console.log(`[Fetch Full Swaps] Batch complete: ${batch.length} swaps, total: ${allSwaps.length}`);
+    console.log(
+      `[Fetch Full Swaps] Batch complete: ${batch.length} swaps, total: ${allSwaps.length}`,
+    );
 
     if (allSwaps.length >= maxSwaps) {
       console.log(`[Fetch Full Swaps] Reached max swaps limit: ${maxSwaps}`);
@@ -285,11 +333,15 @@ export async function fetchFullSwaps(
     }
 
     if (batch.length < batchSize) {
-      console.log(`[Fetch Full Swaps] Received partial batch, no more data available`);
+      console.log(
+        `[Fetch Full Swaps] Received partial batch, no more data available`,
+      );
       break;
     }
   }
 
-  console.log(`[Fetch Full Swaps] Fetch complete: ${allSwaps.length} total swaps`);
+  console.log(
+    `[Fetch Full Swaps] Fetch complete: ${allSwaps.length} total swaps`,
+  );
   return allSwaps;
 }

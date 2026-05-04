@@ -4,10 +4,10 @@
  * Subgraph Configuration
  */
 export const KATANA_SUBGRAPH_URL =
-  "https://gateway.thegraph.com/api/subgraphs/id/433LddGWqTNp791okuyAgumc6ccG7E2N9PB21jEHGmQc";
+  "https://gateway.thegraph.com/api/subgraphs/id/EUtVqtEqe9VyUppqnA6rmkVw3YhsQZfB5pi9PgKKzase";
 
 export const KATANA_SUBGRAPH_HEADERS = {
-  "Authorization": `Bearer ${process.env.SUBGRAPH_HEADER}`,
+  Authorization: `Bearer ${process.env.SUBGRAPH_HEADER}`,
 };
 
 /**
@@ -23,9 +23,8 @@ export const RATE_LIMITER_CONFIG = {
 
 // Tokens updated through cron job
 export const PROACTIVE_TOKENS = [
-  '0xee7d8bcfb72bc1880d0cf19822eb0a2e6577ab62', // WRON/ETH on Katana
+  "0xee7d8bcfb72bc1880d0cf19822eb0a2e6577ab62", // WRON/ETH on Katana
 ];
-
 
 /**
  * Cache Configuration
@@ -51,8 +50,10 @@ export const MAX_TOTAL_SWAPS_INCREMENTAL = 3000; // Maximum total swaps (increme
 /**
  * Stablecoin Addresses on Katana (lowercase)
  */
-export const USDC_KATANA = "0x203A662b0BD271A6ed5a60EdFbd04bFce608FD36".toLowerCase();
-export const AUSD_KATANA = "0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a".toLowerCase();
+export const USDC_KATANA =
+  "0x203A662b0BD271A6ed5a60EdFbd04bFce608FD36".toLowerCase();
+export const AUSD_KATANA =
+  "0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a".toLowerCase();
 
 /**
  * Stablecoin array for easy checking
