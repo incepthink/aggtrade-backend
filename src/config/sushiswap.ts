@@ -22,9 +22,12 @@ export const UPDATE_INTERVAL_HOURS = 1;
 // Chain configurations
 export const CHAIN_CONFIGS: Record<string, ChainConfig> = {
   katana: {
-    subgraphUrl: "https://gateway.thegraph.com/api/subgraphs/id/433LddGWqTNp791okuyAgumc6ccG7E2N9PB21jEHGmQc",
+    // SushiSwap's public Goldsky deployment for Katana V3.
+    // Replaces the old TheGraph endpoint which stopped serving Katana after 2026-05-29.
+    subgraphUrl: "https://api.goldsky.com/api/public/project_clslspm3c0knv01wvgfb2fqyq/subgraphs/sushiswap/v3-katana/gn",
+    // Public endpoint - no Authorization header required.
     subgraphHeaders: {
-      "Authorization": `Bearer ${process.env.SUBGRAPH_HEADER}`,
+      "Content-Type": "application/json",
     },
     redisPrefix: "full_swaps_katana_",
     chain: "katana",

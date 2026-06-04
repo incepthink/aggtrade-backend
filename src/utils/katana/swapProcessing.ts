@@ -18,9 +18,9 @@ export function processSwaps(rawSwaps: SwapData[], isToken0: boolean): Processed
       id: swap.id,
       timestamp: parseInt(swap.timestamp, 10) * 1000, // sec -> ms
       tokenPriceUSD: correctTokenPrice,
-      tokenVolumeUSD: isToken0
-        ? Math.abs(parseFloat(swap.amount0USD || "0"))
-        : Math.abs(parseFloat(swap.amount1USD || "0")),
+      // Goldsky's V3 schema no longer exposes amount0USD/amount1USD; use the
+      // swap's overall USD volume (amountUSD) as the per-token volume.
+      tokenVolumeUSD: Math.abs(parseFloat(swap.amountUSD || "0")),
       totalVolumeUSD: parseFloat(swap.amountUSD || "0"),
     };
   });

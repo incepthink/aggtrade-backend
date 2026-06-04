@@ -9,13 +9,17 @@ import {
   getTokenDataRange 
 } from "../cron-jobs/utils/katanaMySQLHelpers";
 import KatanaSwap from "../models/KatanaSwap";
+import { calculateTokenUSDPrice } from "../utils/katana/priceCalculations";
 import axios from "axios";
 import Bottleneck from "bottleneck";
 
 // Constants
-const KATANA_SUBGRAPH_URL = "https://gateway.thegraph.com/api/subgraphs/id/433LddGWqTNp791okuyAgumc6ccG7E2N9PB21jEHGmQc";
+// SushiSwap's public Goldsky deployment for Katana V3.
+// Replaces the old TheGraph endpoint which stopped serving Katana after 2026-05-29.
+const KATANA_SUBGRAPH_URL = "https://api.goldsky.com/api/public/project_clslspm3c0knv01wvgfb2fqyq/subgraphs/sushiswap/v3-katana/gn";
+// Public endpoint - no Authorization header required.
 const KATANA_SUBGRAPH_HEADERS = {
-  "Authorization": `Bearer ${process.env.SUBGRAPH_HEADER}`,
+  "Content-Type": "application/json",
 };
 const FULL_SWAP_DATA_PREFIX = "full_swaps_katana_";
 const FULL_SWAP_DATA_TTL = 365 * 24 * 60 * 60;
@@ -45,10 +49,6 @@ interface SwapData {
     name: string;
     decimals: string;
   };
-  token0PriceUSD: string;
-  token1PriceUSD: string;
-  amount0USD: string;
-  amount1USD: string;
   amountUSD: string;
   sqrtPriceX96: string;
   pool: {
@@ -128,10 +128,6 @@ async function fetchSwapsForGap(
             name
             decimals
           }
-          token0PriceUSD
-          token1PriceUSD
-          amount0USD
-          amount1USD
           amountUSD
           sqrtPriceX96
           pool {
@@ -191,15 +187,17 @@ function processSwaps(
   isToken0: boolean
 ): ProcessedSwap[] {
   return swaps.map(swap => {
-    const tokenPriceUSD = parseFloat(isToken0 ? swap.token0PriceUSD : swap.token1PriceUSD);
-    const tokenVolumeUSD = parseFloat(isToken0 ? swap.amount0USD : swap.amount1USD);
-    const totalVolumeUSD = parseFloat(swap.amountUSD);
+    // Goldsky's V3 schema no longer exposes token0PriceUSD/token1PriceUSD or
+    // amount0USD/amount1USD. Derive price from sqrtPriceX96 (stablecoin-aware)
+    // and use the swap's overall amountUSD as the per-token volume.
+    const tokenPriceUSD = calculateTokenUSDPrice(swap as any, isToken0);
+    const totalVolumeUSD = parseFloat(swap.amountUSD || "0");
 
     return {
       id: swap.id,
       timestamp: parseInt(swap.timestamp) * 1000,
       tokenPriceUSD,
-      tokenVolumeUSD: Math.abs(tokenVolumeUSD),
+      tokenVolumeUSD: Math.abs(totalVolumeUSD),
       totalVolumeUSD,
     };
   });

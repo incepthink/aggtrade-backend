@@ -3,11 +3,14 @@
 /**
  * Subgraph Configuration
  */
+// SushiSwap's public Goldsky deployment for Katana V3.
+// Replaces the old TheGraph endpoint which stopped serving Katana after 2026-05-29.
 export const KATANA_SUBGRAPH_URL =
-  "https://gateway.thegraph.com/api/subgraphs/id/433LddGWqTNp791okuyAgumc6ccG7E2N9PB21jEHGmQc";
+  "https://api.goldsky.com/api/public/project_clslspm3c0knv01wvgfb2fqyq/subgraphs/sushiswap/v3-katana/gn";
 
+// Public endpoint - no Authorization header required.
 export const KATANA_SUBGRAPH_HEADERS = {
-  Authorization: `Bearer ${process.env.SUBGRAPH_HEADER}`,
+  "Content-Type": "application/json",
 };
 
 /**

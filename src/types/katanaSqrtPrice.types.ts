@@ -17,8 +17,6 @@ export interface SwapDataWithSqrt {
     name: string;
     decimals: string;
   };
-  amount0USD: string;
-  amount1USD: string;
   amountUSD: string;
   pool: {
     id: string;

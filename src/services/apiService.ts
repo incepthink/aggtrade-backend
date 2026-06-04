@@ -128,7 +128,7 @@ export class ApiService {
         { query, variables },
         {
           timeout: POOLS_TIMEOUT,
-          headers: { "Content-Type": "application/json", ...KATANA_SUBGRAPH_HEADERS }
+          headers: KATANA_SUBGRAPH_HEADERS
         }
       );
 
@@ -205,8 +205,6 @@ export class ApiService {
           tick
           token0 { id symbol name decimals }
           token1 { id symbol name decimals }
-          amount0USD
-          amount1USD
           amountUSD
           pool { id }
         }
@@ -250,7 +248,7 @@ export class ApiService {
           { query, variables },
           {
             timeout: GRAPHQL_TIMEOUT,
-            headers: { "Content-Type": "application/json", ...KATANA_SUBGRAPH_HEADERS }
+            headers: KATANA_SUBGRAPH_HEADERS
           }
         );
 

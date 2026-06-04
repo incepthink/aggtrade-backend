@@ -18,10 +18,6 @@ export interface SwapData {
     name: string;
     decimals: string;
   };
-  token0PriceUSD: string;
-  token1PriceUSD: string;
-  amount0USD: string;
-  amount1USD: string;
   amountUSD: string;
   sqrtPriceX96: string;
   pool: {
@@ -60,11 +56,7 @@ export interface FullSwapData {
   origin: string;
   amount0: string;
   amount1: string;
-  amount0USD: string;
-  amount1USD: string;
   amountUSD: string;
-  token0PriceUSD: string;
-  token1PriceUSD: string;
   sqrtPriceX96: string;
   tick: string;
   logIndex: string;

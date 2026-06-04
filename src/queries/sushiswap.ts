@@ -106,10 +106,7 @@ export function getSwapsQueryV3(): string {
           name
           decimals
         }
-        token0PriceUSD
-        token1PriceUSD
-        amount0USD
-        amount1USD
+        sqrtPriceX96
         amountUSD
         pool {
           id

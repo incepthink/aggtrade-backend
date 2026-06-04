@@ -1,6 +1,8 @@
 // src/utils/sushiswap.ts
 import type { SwapData, SwapDataV2, SwapDataV3, ProcessedSwap, Pool, PoolV3, PairV2, NormalizedPool, TokenInfo } from "../types/sushiswap";
 import { FULL_DATA_DAYS, UPDATE_INTERVAL_HOURS } from "../config/sushiswap";
+import { calculateTokenUSDPrice } from "./katana/priceCalculations";
+import type { SwapData as KatanaSwapData } from "./katana/types";
 
 /**
  * Calculate time range for data retrieval
@@ -92,19 +94,39 @@ export function extractTokensFromSwap(swap: SwapData): { token0: TokenInfo; toke
 
 /**
  * Process raw swaps into our format (version agnostic)
+ *
+ * V3 (Katana/Goldsky): the schema no longer exposes token0PriceUSD/token1PriceUSD/
+ * amount0USD/amount1USD. Price is derived from sqrtPriceX96 (stablecoin-aware) and
+ * volume uses the swap's overall amountUSD.
+ * V2 (Ethereum): keeps the original per-token price/volume fields.
  */
 export function processSwaps(rawSwaps: SwapData[], tokenAddress: string, isToken0: boolean): ProcessedSwap[] {
-  return rawSwaps.map(swap => ({
-    id: swap.id,
-    timestamp: parseInt(swap.timestamp) * 1000, // Convert to milliseconds
-    tokenPriceUSD: isToken0 
-      ? parseFloat(swap.token0PriceUSD || "0")
-      : parseFloat(swap.token1PriceUSD || "0"),
-    tokenVolumeUSD: isToken0
-      ? parseFloat(swap.amount0USD || "0") 
-      : parseFloat(swap.amount1USD || "0"),
-    totalVolumeUSD: parseFloat(swap.amountUSD || "0"),
-  }));
+  return rawSwaps.map(swap => {
+    if (isSwapDataV3(swap)) {
+      // Goldsky V3: derive price from sqrtPriceX96, volume from amountUSD.
+      const tokenPriceUSD = calculateTokenUSDPrice(swap as unknown as KatanaSwapData, isToken0);
+      return {
+        id: swap.id,
+        timestamp: parseInt(swap.timestamp) * 1000, // Convert to milliseconds
+        tokenPriceUSD,
+        tokenVolumeUSD: Math.abs(parseFloat(swap.amountUSD || "0")),
+        totalVolumeUSD: parseFloat(swap.amountUSD || "0"),
+      };
+    }
+
+    // V2 (Ethereum) still exposes per-token price/volume fields.
+    return {
+      id: swap.id,
+      timestamp: parseInt(swap.timestamp) * 1000, // Convert to milliseconds
+      tokenPriceUSD: isToken0
+        ? parseFloat(swap.token0PriceUSD || "0")
+        : parseFloat(swap.token1PriceUSD || "0"),
+      tokenVolumeUSD: isToken0
+        ? parseFloat(swap.amount0USD || "0")
+        : parseFloat(swap.amount1USD || "0"),
+      totalVolumeUSD: parseFloat(swap.amountUSD || "0"),
+    };
+  });
 }
 
 /**

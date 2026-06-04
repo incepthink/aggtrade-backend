@@ -46,7 +46,7 @@ export async function fetchPoolsByTVL(tokenAddress: string): Promise<Pool[]> {
       { headers: KATANA_SUBGRAPH_HEADERS },
     ),
   );
-
+  console.log(response);
   if (response.data.errors) {
     console.error("[Fetch Pools] GraphQL errors:", response.data.errors);
     throw new Error(`GraphQL error: ${JSON.stringify(response.data.errors)}`);

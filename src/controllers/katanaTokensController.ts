@@ -53,10 +53,13 @@ export interface ProcessedToken {
 // -----------------------------
 // Constants
 // -----------------------------
+// SushiSwap's public Goldsky deployment for Katana V3.
+// Replaces the old TheGraph endpoint which stopped serving Katana after 2026-05-29.
 const KATANA_SUBGRAPH_URL =
-  "https://gateway.thegraph.com/api/subgraphs/id/433LddGWqTNp791okuyAgumc6ccG7E2N9PB21jEHGmQc";
+  "https://api.goldsky.com/api/public/project_clslspm3c0knv01wvgfb2fqyq/subgraphs/sushiswap/v3-katana/gn";
+// Public endpoint - no Authorization header required.
 const KATANA_SUBGRAPH_HEADERS = {
-  "Authorization": `Bearer ${process.env.SUBGRAPH_HEADER}`,
+  "Content-Type": "application/json",
 };
 const KATANA_CHAIN_ID = 747474;
 
@@ -125,7 +128,7 @@ async function fetchAllPools(): Promise<GraphPool[]> {
         },
         {
           timeout: 15000,
-          headers: { "Content-Type": "application/json", ...KATANA_SUBGRAPH_HEADERS },
+          headers: KATANA_SUBGRAPH_HEADERS,
         }
       );
 

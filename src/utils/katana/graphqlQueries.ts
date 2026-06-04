@@ -45,10 +45,6 @@ export function getSwapsQuery(): string {
         timestamp
         token0 { id symbol name decimals }
         token1 { id symbol name decimals }
-        token0PriceUSD
-        token1PriceUSD
-        amount0USD
-        amount1USD
         amountUSD
         sqrtPriceX96
         pool { id }
@@ -75,10 +71,6 @@ export function getHistoricalSwapsQuery(): string {
         timestamp
         token0 { id symbol name decimals }
         token1 { id symbol name decimals }
-        token0PriceUSD
-        token1PriceUSD
-        amount0USD
-        amount1USD
         amountUSD
         sqrtPriceX96
         pool { id }
@@ -185,11 +177,7 @@ export function getFullSwapsQuery(): string {
         origin
         amount0
         amount1
-        amount0USD
-        amount1USD
         amountUSD
-        token0PriceUSD
-        token1PriceUSD
         sqrtPriceX96
         tick
         logIndex

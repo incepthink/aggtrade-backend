@@ -9,15 +9,14 @@ export interface TokenInfo {
 }
 
 // V3 (Katana) Swap Data
+// Goldsky's Katana V3 Swap schema does not expose token0PriceUSD/token1PriceUSD/
+// amount0USD/amount1USD. Price is derived from sqrtPriceX96; volume uses amountUSD.
 export interface SwapDataV3 {
   id: string;
   timestamp: string;
   token0: TokenInfo;
   token1: TokenInfo;
-  token0PriceUSD: string;
-  token1PriceUSD: string;
-  amount0USD: string;
-  amount1USD: string;
+  sqrtPriceX96: string;
   amountUSD: string;
   pool: {
     id: string;
